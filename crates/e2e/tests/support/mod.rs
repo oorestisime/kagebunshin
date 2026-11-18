@@ -589,7 +589,8 @@ impl Walk {
 }
 
 /// `line` with an audit line's time, the time a source was last checked, the
-/// day a command ran with the keys and every `pid N` replaced.
+/// day a command ran with the keys, the time of the last run and every
+/// `pid N` replaced.
 fn stable(line: &str) -> String {
     let b = line.as_bytes();
     // 2026-11-15 06:29:43Z
@@ -616,6 +617,19 @@ fn stable(line: &str) -> String {
             })
         {
             line.replace_range(time..time + 8, "<time>");
+        }
+    }
+    // runs in the last day: 1, last at 2026-11-15 06:29:43Z
+    if let Some(at) = line.find(", last at ") {
+        let time = at + ", last at ".len();
+        let b = &line.as_bytes()[time..];
+        if b.len() >= shape.len()
+            && shape.iter().zip(b).all(|(s, c)| match s {
+                b'd' => c.is_ascii_digit(),
+                other => c == other,
+            })
+        {
+            line.replace_range(time..time + shape.len(), "<time>");
         }
     }
     // ran with them on 15 Nov

@@ -11,6 +11,7 @@ $KAGEBUNSHIN_CONFIG_DIR, else $XDG_CONFIG_HOME/kagebunshin, else ~/.config/kageb
 
 $XDG_STATE_HOME/kagebunshin, else ~/.local/state/kagebunshin
 ├── audit.jsonl          the audit log, mode 0600, rotated to audit.jsonl.1 at 10 MiB
+├── runs.jsonl           the runs that needed no approval, kept the same way
 ├── proofs.json          the last `run --strict` that worked, per environment
 ├── imported.json        the env files `onboard` imported and left in place:
 │                        path, size and time, so they are not named again
@@ -42,9 +43,6 @@ strict_memory = false         # refuse values that cannot be locked in memory, r
 # they match waits for a human decision. See project-files.md.
 sensitive_source_patterns = ["*-prod*"]
 
-[audit]
-dev_runs = false              # also record runs in environments that are not sensitive
-
 [masking]
 min_len = 8                   # values shorter than this are not masked in piped output
 
@@ -52,8 +50,22 @@ min_len = 8                   # values shorter than this are not masked in piped
 port = 47317                  # the remote endpoint's TCP port, and the one --machine connects to
 ```
 
-Sensitive access and every denial are always recorded, whatever
-`audit.dev_runs` says.
+## The logs
+
+What is recorded is not a setting. Sensitive access, every denial and
+every change go in `audit.jsonl`. A run that needed no approval goes in
+`runs.jsonl` beside it, a file of its own so that ordinary use, however
+much, pushes nothing out of the audit log. Both hold names, never values.
+
+```sh
+kagebunshin audit --since 1d                     # the audit log
+kagebunshin audit --all --since 1d               # and the ordinary runs
+kagebunshin audit --all --action run --project widget --env dev
+```
+
+`kagebunshin status` says how many runs got their values in the last day:
+across every project outside a checkout, of the environment on show in
+one.
 
 ## Environment variables
 

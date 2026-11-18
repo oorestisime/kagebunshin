@@ -84,6 +84,7 @@ env: dev
 left for the human:
   delete .env, which still holds values in plain text: rm $T/work/blog/.env
 every key set; `./test.sh` ran with them on <day>
+runs in the last day: 1, last at <time>
 
 -- project remove
 

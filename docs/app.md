@@ -26,7 +26,8 @@ button beside it. Remote agents says whether the
 [remote endpoint](config.md#the-remote-endpoint) listens and lists the
 machines it lets in. Each grant can be revoked there, or given a new
 token, which shows once and takes the passphrase. Activity is the audit
-log of every project or of one.
+log of every project or of one; the runs that needed no approval are not
+in it, and `kagebunshin audit --all` lists them.
 
 Keep agents away from what matters by marking environments, secrets or
 store keys sensitive in the app. Each change takes the passphrase. A

@@ -381,14 +381,22 @@ fn status_diff_sync_lock_unlock() {
         "daemon: locked
 providers:
   aws_sm  fake  ok
+runs in the last day: none
 run `kagebunshin unlock` to see where each key comes from
 "
     );
     let o = w.kb("widget", &["status", "--json"]);
+    let mut out: serde_json::Value = serde_json::from_str(&stdout(&o)).unwrap();
+    // Counted from a day ago, which is not the same twice.
+    assert!(out["runs"]["since"].take().is_u64(), "{out}");
     assert_eq!(
-        stdout(&o),
-        r#"{"locked":true,"env":null,"providers":[{"provider":"aws_sm","detail":"fake","health":{"state":"ok"}}]}
-"#
+        out,
+        serde_json::json!({
+            "locked": true,
+            "env": null,
+            "providers": [{"provider": "aws_sm", "detail": "fake", "health": {"state": "ok"}}],
+            "runs": {"since": null, "count": 0, "projects": 0},
+        })
     );
     let o = w.kb("widget", &["diff", "--json"]);
     assert_eq!(code(&o), 5);
@@ -900,7 +908,10 @@ fn refusals_and_failures_exit_with_stable_codes() {
 
     // Outside a checkout, status still reports the lock state; diff cannot.
     let o = w.kb("elsewhere", &["status"]);
-    assert_eq!((code(&o), stdout(&o).as_str()), (0, "daemon: unlocked\n"));
+    assert_eq!(
+        (code(&o), stdout(&o).as_str()),
+        (0, "daemon: unlocked\nruns in the last day: none\n")
+    );
     let o = w.kb("elsewhere", &["--json", "diff"]);
     assert_eq!(code(&o), 1);
     assert_eq!(json_error(&o)["code"], "no_project");
@@ -1799,12 +1810,43 @@ const WAIT: &str = "and waits for a human decision; ask the human: open the app 
 const ASK: &str = "sensitive or acknowledge it is not production";
 
 /// The daemon's events and the CLI's own config edits land in one log,
-/// which `audit` reads without the daemon: names, never values.
+/// which `audit` reads without the daemon: names, never values. A run that
+/// needed no approval is in the runs log, which `audit --all` reads too
+/// and `status` counts.
 #[test]
 fn audit_shows_what_was_asked_and_decided() {
     let w = World::new();
     w.mark_prod();
+    let o = w.kb("elsewhere", &["status"]);
+    assert!(
+        stdout(&o).contains("\nruns in the last day: none"),
+        "{}",
+        stdout(&o)
+    );
     assert_eq!(code(&w.kb("widget", &["run", "--", "true"])), 0);
+    let o = w.kb("elsewhere", &["status"]);
+    let text = stdout(&o);
+    let line = text.lines().find(|l| l.starts_with("runs in")).unwrap();
+    assert!(
+        line.starts_with("runs in the last day: 1 in 1 project, last at ")
+            && line.ends_with("Z (widget/dev)"),
+        "{line}"
+    );
+    let o = w.kb("widget", &["status"]);
+    let text = stdout(&o);
+    let line = text.lines().find(|l| l.starts_with("runs in")).unwrap();
+    assert!(
+        line.starts_with("runs in the last day: 1, last at ") && line.ends_with('Z'),
+        "{line}"
+    );
+    let o = w.kb("widget", &["status", "--json"]);
+    let out: serde_json::Value = serde_json::from_str(&stdout(&o)).unwrap();
+    let runs = &out["runs"];
+    assert_eq!((&runs["count"], &runs["projects"]), (&1.into(), &1.into()));
+    assert_eq!(
+        (&runs["last"]["project"], &runs["last"]["env"]),
+        (&"widget".into(), &"dev".into())
+    );
     assert_ne!(
         code(&w.kb("widget", &["--env", "prod", "run", "--", "true"])),
         0
@@ -1831,7 +1873,7 @@ fn audit_shows_what_was_asked_and_decided() {
             )
         })
         .collect();
-    // The dev run is left out: audit.dev_runs is off.
+    // The dev run is left out: it needed no approval.
     assert_eq!(
         actions,
         [
@@ -1871,8 +1913,47 @@ fn audit_shows_what_was_asked_and_decided() {
         lines[4]
     );
 
-    let log = fs::read_to_string(w.root().join("state/kagebunshin/audit.jsonl")).unwrap();
-    assert_no_canary(&w.canary, &log);
+    // With --all the runs log is read too, and the filters hold over both.
+    let listed = |args: &[&str]| -> Vec<String> {
+        let o = w.kb("elsewhere", &[&["--json", "audit"], args].concat());
+        assert_eq!(code(&o), 0, "{}", stderr(&o));
+        let out: serde_json::Value = serde_json::from_str(&stdout(&o)).unwrap();
+        assert_eq!(out["runs_path"].is_string(), args.contains(&"--all"));
+        (out["events"].as_array().unwrap().iter())
+            .map(|e| {
+                format!(
+                    "{} {}",
+                    e["action"].as_str().unwrap(),
+                    e["decision"].as_str().unwrap()
+                )
+            })
+            .collect()
+    };
+    assert_eq!(listed(&["--all"]).len(), 7);
+    assert_eq!(listed(&["--action", "run"]), ["run denied"]);
+    assert_eq!(
+        listed(&["--all", "--action", "run", "--env", "dev"]),
+        ["run allowed"]
+    );
+    assert_eq!(
+        listed(&["--all", "--project", "widget", "--env", "prod"]),
+        ["mark env allowed", "run denied"]
+    );
+    assert_eq!(listed(&["--all", "--project", "gadget"]).len(), 0);
+    let o = w.kb(
+        "elsewhere",
+        &["audit", "--all", "--action", "run", "--env", "dev"],
+    );
+    assert!(
+        stdout(&o).contains(" allowed run widget/dev pid ") && stdout(&o).contains(" program true"),
+        "{}",
+        stdout(&o)
+    );
+
+    let state = w.root().join("state/kagebunshin");
+    for file in ["audit.jsonl", "runs.jsonl"] {
+        assert_no_canary(&w.canary, &fs::read_to_string(state.join(file)).unwrap());
+    }
     let o = w.kb("elsewhere", &["audit", "--since", "soon"]);
     assert_eq!(code(&o), 2);
 }
@@ -2523,7 +2604,7 @@ fn setup_creates_the_store_and_unlocks() {
     let store = config.join("store.age");
     let before = fs::read(&store).unwrap();
     let o = w.kb("elsewhere", &["status"]);
-    assert_eq!(stdout(&o), "daemon: unlocked\n");
+    assert_eq!(stdout(&o), "daemon: unlocked\nruns in the last day: none\n");
 
     // A wrong passphrase leaves the store and the daemon as they were.
     assert_eq!(code(&w.kb("elsewhere", &["lock"])), 0);
@@ -2538,7 +2619,7 @@ fn setup_creates_the_store_and_unlocks() {
     assert_eq!(last_json(&out)["store"], "existing");
     assert_eq!(
         stdout(&w.kb("elsewhere", &["status"])),
-        "daemon: unlocked\n"
+        "daemon: unlocked\nruns in the last day: none\n"
     );
 
     // Mismatched new passphrases create nothing.
@@ -2674,7 +2755,7 @@ fn setup_installs_the_service_and_the_apps_launcher() {
     assert!(login.contains(&exec), "{login}");
     assert_eq!(
         stdout(&w.kb("elsewhere", &["status"])),
-        "daemon: unlocked\n"
+        "daemon: unlocked\nruns in the last day: none\n"
     );
 
     // With none running, a later setup starts none: its person ended it.

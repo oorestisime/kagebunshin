@@ -3185,17 +3185,15 @@ async fn what_only_a_human_may_do_needs_the_passphrase() {
 }
 
 fn audited(
-    dev_runs: bool,
     log: impl FnOnce(&Path) -> crate::audit::AuditLog,
 ) -> (tempfile::TempDir, crate::audit::AuditLog, Daemon) {
     let tmp = tempfile::tempdir().unwrap();
     let file = StoreFile::new(tmp.path().join(STORE_FILE)).with_test_work_factor();
     let project = parse_project(Path::new("/cfg/projects/widget.toml"), STORED).unwrap();
-    let mut config = Config {
+    let config = Config {
         default_provider: Provider::File,
         ..Config::default()
     };
-    config.audit.dev_runs = dev_runs;
     let registry = Registry::new(config, vec![project]).unwrap();
     let log = log(tmp.path());
     let d = Daemon::new(
@@ -3221,13 +3219,13 @@ fn logged(log: &crate::audit::AuditLog) -> Vec<String> {
 }
 
 /// State changes, value printing and every denial are recorded, with names
-/// and never values or passphrases; a dev run is not, by default.
+/// and never values or passphrases; an ordinary run goes to the runs log.
 #[tokio::test]
 async fn the_audit_log_records_changes_and_denials() {
     use crate::audit::Decision;
     let canary = Canary::new();
     let pass = Canary::new();
-    let (tmp, log, d) = audited(false, state_log);
+    let (tmp, log, d) = audited(state_log);
     let me = this_process();
     let ok = |r: &Response| assert!(!matches!(r, Response::Error(_)), "{r:?}");
 
@@ -3271,6 +3269,7 @@ async fn the_audit_log_records_changes_and_denials() {
             "reveal allowed",
         ]
     );
+    assert_eq!(logged(&log.runs()), ["run allowed"]);
     let (events, _) = log.read().unwrap();
     let ev = |action: &str, decision| {
         events
@@ -3328,7 +3327,7 @@ fn marked(r: Response) {
 #[tokio::test]
 async fn a_mark_added_with_no_passphrase_holds_and_reaches_the_store() {
     use crate::audit::Decision;
-    let (tmp, log, d) = audited(false, state_log);
+    let (tmp, log, d) = audited(state_log);
     let file = StoreFile::new(tmp.path().join(STORE_FILE)).with_test_work_factor();
     let pass = || Passphrase::new("pw".into());
     let dev = || "widget.dev".parse().unwrap();
@@ -3570,10 +3569,10 @@ async fn a_mark_with_no_passphrase_marks_an_envs_sources_as_a_human_does() {
     assert_eq!(error_code(r), ErrorCode::Store);
 }
 
-/// With `audit.dev_runs`, a run is recorded with its keys and program
-/// before its values are sent, and refused if it cannot be.
+/// An ordinary run is recorded in the runs log, with its keys and program
+/// and nothing of the audit log's, and goes ahead when it cannot be.
 #[tokio::test]
-async fn dev_runs_are_recorded_when_asked_for() {
+async fn ordinary_runs_go_to_the_runs_log() {
     async fn setup(tmp: &tempfile::TempDir, d: &Daemon) {
         let pass = "audit test";
         let file = StoreFile::new(tmp.path().join(STORE_FILE)).with_test_work_factor();
@@ -3586,35 +3585,41 @@ async fn dev_runs_are_recorded_when_asked_for() {
         command: Vec::new(),
     };
 
-    let (tmp, log, d) = audited(true, state_log);
+    let (tmp, log, d) = audited(state_log);
     setup(&tmp, &d).await;
+    let before = logged(&log);
     let Response::RunEnv(reply) = d.handle(run()).await else {
         panic!()
     };
     assert_eq!(reply.vars.len(), 1);
-    let (events, _) = log.read().unwrap();
-    let event = events.last().unwrap();
+    assert_eq!(logged(&log), before);
+    let (events, unreadable) = log.runs().read().unwrap();
+    assert_eq!((events.len(), unreadable), (1, 0));
+    let event = &events[0];
     assert_eq!(event.action, "run");
+    assert_eq!(event.decision, crate::audit::Decision::Allowed);
+    assert_eq!(
+        event.project.as_ref().map(ToString::to_string).as_deref(),
+        Some("widget")
+    );
+    assert_eq!(
+        event.env.as_ref().map(ToString::to_string).as_deref(),
+        Some("dev")
+    );
     assert_eq!(event.program.as_deref(), Some("npm"));
     assert_eq!(event.keys, ["A"]);
 
-    // A log that cannot be written: under a regular file.
+    // Logs that cannot be written: under a regular file. The run goes
+    // ahead all the same; a value that needs the audit log does not.
     let blocked = |dir: &Path| {
         std::fs::write(dir.join("state"), "").unwrap();
         state_log(dir)
     };
-    let (tmp, _, d) = audited(true, blocked);
-    setup(&tmp, &d).await;
-    assert_eq!(error_code(d.handle(run()).await), ErrorCode::Internal);
-    // Requests that hand out nothing still go through.
-    assert!(matches!(
-        d.handle(Request::Lock).await,
-        Response::LockState { .. }
-    ));
-
-    let (tmp, _, d) = audited(false, blocked);
+    let (tmp, _, d) = audited(blocked);
     setup(&tmp, &d).await;
     assert!(matches!(d.handle(run()).await, Response::RunEnv(_)));
+    let resp = d.handle(get(None, "A", "audit test")).await;
+    assert_eq!(error_code(resp), ErrorCode::Internal);
 }
 
 /// Proton keys through the real providers and a fake `pass-cli`: the token
@@ -4664,7 +4669,7 @@ async fn an_approval_with_no_example_is_for_every_key() {
 /// left to hand the values to.
 #[tokio::test]
 async fn a_prompt_goes_when_its_caller_ends() {
-    let (tmp, log, d) = audited(false, state_log);
+    let (tmp, log, d) = audited(state_log);
     let file = StoreFile::new(tmp.path().join(STORE_FILE)).with_test_work_factor();
     init(&file, &d).await;
     let set = d
@@ -4851,7 +4856,7 @@ fn an_unapproved_request_says_what_was_asked() {
 #[tokio::test]
 async fn sensitive_values_wait_for_approval_in_the_app() {
     let canary = Canary::new();
-    let (tmp, log, d) = audited(false, state_log);
+    let (tmp, log, d) = audited(state_log);
     let file = StoreFile::new(tmp.path().join(STORE_FILE)).with_test_work_factor();
     init(&file, &d).await;
     let set = d
@@ -5078,7 +5083,7 @@ async fn remote_daemon() -> (
     let tailnet = Arc::new(crate::tailnet::fake::FakeTailnet::running(&[(
         "nLAPTOP", "laptop",
     )]));
-    let (tmp, log, d) = audited(false, state_log);
+    let (tmp, log, d) = audited(state_log);
     let d = d.with_tailnet(tailnet.clone());
     let file = StoreFile::new(tmp.path().join(STORE_FILE)).with_test_work_factor();
     init(&file, &d).await;

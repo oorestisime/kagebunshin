@@ -385,11 +385,20 @@ pub enum Command {
     /// Show the audit log
     ///
     /// What was asked of kagebunshin, by whom, and what it decided: names,
-    /// never values. Read from $XDG_STATE_HOME/kagebunshin/audit.jsonl.
+    /// never values. Read from $XDG_STATE_HOME/kagebunshin/audit.jsonl, and
+    /// with --all from runs.jsonl beside it, which has the runs that needed
+    /// no approval. Here --project and --env list the events of one project
+    /// or environment.
     Audit {
         /// Only events this recent, such as 1h or 7d
         #[arg(long, value_parser = audit::parse_since, value_name = "DURATION")]
         since: Option<u64>,
+        /// Also the runs that needed no approval
+        #[arg(long)]
+        all: bool,
+        /// Only this request or command, such as run or unlock
+        #[arg(long, value_name = "ACTION")]
+        action: Option<String>,
     },
     /// Run the daemon in the foreground or as a service, or check on it
     Daemon {
@@ -731,6 +740,12 @@ fn dispatch(cli: Cli) -> Result<(), CliError> {
                 (None, Some(facts)) => next::left_for_human(&report, facts),
                 _ => Vec::new(),
             };
+            // How much this machine's daemon was used; another's logs are
+            // not here to read.
+            let runs = match &remote {
+                Some(_) => None,
+                None => audit::usage(report.env.as_ref().map(|e| (&e.project, &e.env))),
+            };
             #[derive(serde::Serialize)]
             struct Out<'a> {
                 #[serde(flatten)]
@@ -738,12 +753,15 @@ fn dispatch(cli: Cli) -> Result<(), CliError> {
                 providers: &'a [ProviderStatus],
                 #[serde(skip_serializing_if = "Vec::is_empty")]
                 human: Vec<next::HumanJson<'a>>,
+                #[serde(skip_serializing_if = "Option::is_none")]
+                runs: Option<&'a audit::Usage>,
             }
-            let text = render_status(&report, &providers, &human);
+            let text = render_status(&report, &providers, &human, runs.as_ref());
             let out = Out {
                 report: &report,
                 providers: &providers,
                 human: next::human_json(&human),
+                runs: runs.as_ref(),
             };
             print_report(cli.json, &out, text, &bad_lines)
         }
@@ -858,7 +876,16 @@ fn dispatch(cli: Cli) -> Result<(), CliError> {
         Command::Store { action } => store(cli.socket, cli.json, action),
         Command::Mark { target } => mark(cli.socket, cli.json, cli.env, target),
         Command::Setup { no_service } => setup(cli.socket, cli.json, no_service),
-        Command::Audit { since } => audit::show(cli.json, since),
+        Command::Audit { since, all, action } => audit::show(
+            cli.json,
+            &audit::Filter {
+                since,
+                all,
+                action,
+                project: cli.project,
+                env: cli.env,
+            },
+        ),
         Command::Import { file, name } => project::import(cli.json, &file, name),
         Command::Onboard {
             dirs,
@@ -2003,7 +2030,12 @@ providers:",
     out.push_str(&table(&rows));
 }
 
-fn render_status(r: &StatusReport, providers: &[ProviderStatus], human: &[next::Step]) -> String {
+fn render_status(
+    r: &StatusReport,
+    providers: &[ProviderStatus],
+    human: &[next::Step],
+    runs: Option<&audit::Usage>,
+) -> String {
     let mut out = format!("daemon: {}", if r.locked { "locked" } else { "unlocked" });
     let now = crate::source::unix_now();
     for e in &r.expiring {
@@ -2014,6 +2046,9 @@ fn render_status(r: &StatusReport, providers: &[ProviderStatus], human: &[next::
         remote::render(&mut out, remote, now);
     }
     let Some(env) = &r.env else {
+        if let Some(runs) = runs {
+            out.push_str(&format!("\n{}", runs.line(false)));
+        }
         if r.locked {
             out.push_str("\nrun `kagebunshin unlock` to see where each key comes from");
         }
@@ -2081,6 +2116,11 @@ fn render_status(r: &StatusReport, providers: &[ProviderStatus], human: &[next::
     }
     if let Some(proof) = env.proof.as_ref().filter(|_| env.missing.is_empty()) {
         out.push_str(&format!("\n{}", next::proof_line(proof, now)));
+    }
+    // Of one environment, said only when there were some: an environment
+    // being set up has none yet.
+    if let Some(runs) = runs.filter(|r| r.count > 0) {
+        out.push_str(&format!("\n{}", runs.line(true)));
     }
     for w in &env.warnings {
         out.push_str(&format!("\nwarning: {w}"));
@@ -2486,7 +2526,7 @@ mod tests {
             shared: Vec::new(),
             app: false,
         };
-        let text = render_status(&status, &[], &[]);
+        let text = render_status(&status, &[], &[], None);
         assert!(!text.contains("shared with"), "{text}");
 
         let shared = |name: &str, prefix, open: &[&str], sensitive, production| {
@@ -2511,7 +2551,7 @@ mod tests {
             ],
             ..status
         };
-        let text = render_status(&status, &[], &[]);
+        let text = render_status(&status, &[], &[], None);
         let at = text.find("\nshared with other environments").unwrap();
         let rows: Vec<&str> = text[at..].lines().skip(2).take(5).collect();
         let with = "also read by widget.qa, shop.prod";
@@ -2613,7 +2653,7 @@ mod tests {
             shared: Vec::new(),
             app: false,
         };
-        let text = render_status(&status, &[], &[]);
+        let text = render_status(&status, &[], &[], None);
         assert!(
             text.ends_with(
                 "0 keys\nmissing (in .env.example, set by no source):\n  DB_URL\n  STRIPE_KEY\n\
@@ -2680,7 +2720,7 @@ mod tests {
             shared: Vec::new(),
             app: false,
         };
-        let text = render_status(&status, &[], &[]);
+        let text = render_status(&status, &[], &[], None);
         let rows: Vec<&str> = text
             .lines()
             .skip_while(|l| !l.ends_with("2 keys"))

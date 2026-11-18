@@ -267,6 +267,8 @@ pub fn uninstall(
     let audit_owns = files(vec![
         audit_name.clone(),
         format!("{audit_name}.1"),
+        crate::audit::RUNS_FILE.into(),
+        format!("{}.1", crate::audit::RUNS_FILE),
         "audit.lock".into(),
     ]);
     let socket_owns = files(vec![
