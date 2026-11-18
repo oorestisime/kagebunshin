@@ -264,12 +264,16 @@ pub fn uninstall(
             files(n)
         })
     };
+    // The logs, and what the daemon and `onboard` remember beside them.
     let audit_owns = files(vec![
         audit_name.clone(),
         format!("{audit_name}.1"),
         crate::audit::RUNS_FILE.into(),
         format!("{}.1", crate::audit::RUNS_FILE),
         "audit.lock".into(),
+        crate::daemon::proof::FILE.into(),
+        super::onboard::Record::FILE.into(),
+        super::onboard::LeftOut::FILE.into(),
     ]);
     let socket_owns = files(vec![
         socket_name.clone(),
