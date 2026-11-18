@@ -19,7 +19,8 @@ use serde::{Deserialize, Serialize};
 use crate::config::EnvSettings;
 use crate::ipc::protocol::Proof;
 
-const FILE: &str = "proofs.json";
+/// Its file, beside the audit log.
+pub const FILE: &str = "proofs.json";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct Stored {

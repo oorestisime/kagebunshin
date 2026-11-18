@@ -721,7 +721,7 @@ pub(super) struct Record {
 }
 
 impl Record {
-    const FILE: &str = "imported.json";
+    pub(super) const FILE: &str = "imported.json";
 
     pub(super) fn read() -> Self {
         let log = crate::audit::AuditLog::from_env().ok();
@@ -770,7 +770,7 @@ pub(super) struct LeftOut {
 }
 
 impl LeftOut {
-    const FILE: &str = "left-out.json";
+    pub(super) const FILE: &str = "left-out.json";
 
     pub(super) fn read() -> Self {
         let log = crate::audit::AuditLog::from_env().ok();
