@@ -1232,9 +1232,11 @@ impl Daemon {
     /// field for each key it names.
     ///
     /// With an audit log, records every denial, and every request that
-    /// changes state or prints a value, before replying. A `run` that hands
-    /// out values is recorded only with `audit.dev_runs`, unless it was
-    /// approved; if it cannot be recorded, its values are not handed out.
+    /// changes state or prints a value, before replying; if a hand-out
+    /// cannot be recorded, its values are not handed out. A `run` that
+    /// hands out values without an approval is recorded in the runs log
+    /// beside it instead, and goes ahead when that cannot be written: it
+    /// is a record of use, not a control.
     /// An approval prompt is recorded when it is shown, and the request's
     /// entry says whether it was approved, denied or timed out.
     pub async fn handle_from(&self, req: Request, caller: &Caller) -> Response {
@@ -1273,14 +1275,12 @@ impl Daemon {
         };
         // A request that waited for approval is always recorded.
         asked.always |= approval.is_some();
-        if decision == Decision::Allowed && !asked.always && !asked.handover {
+        // Allowed, and not what the audit log records whatever the answer.
+        let routine = decision == Decision::Allowed && !asked.always;
+        if routine && !asked.handover {
             return response;
         }
         let registry = self.registry().ok();
-        let dev_runs = registry.as_ref().is_some_and(|r| r.config.audit.dev_runs);
-        if decision == Decision::Allowed && !asked.always && !dev_runs {
-            return response;
-        }
         let mut event = Event::new(asked.action, decision, caller);
         event.reason = reason;
         event.keys = asked.keys;
@@ -1310,6 +1310,13 @@ impl Daemon {
             event.project = Some(reply.project.clone());
             event.env = Some(reply.env.clone());
             event.keys = reply.vars.iter().map(|v| v.key.to_string()).collect();
+        }
+        if routine {
+            let runs = log.runs();
+            if let Err(e) = runs.append(&event) {
+                warn!(error = %e, path = %runs.path().display(), "cannot write the runs log");
+            }
+            return response;
         }
         match log.append(&event) {
             Ok(()) => response,

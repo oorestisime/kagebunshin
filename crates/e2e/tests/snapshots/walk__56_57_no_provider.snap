@@ -77,6 +77,7 @@ to fill in what is missing:
   ask the human:
     kagebunshin store set shop.dev DATABASE_URL STRIPE_SECRET
       (it asks for the store passphrase, then each value)
+runs in the last day: 1, last at <time>
 
 $ kagebunshin run --strict -- ./test.sh
 kagebunshin: 2 keys in .env.example are not set by any source: DATABASE_URL, STRIPE_SECRET

@@ -32,6 +32,7 @@ impl World {
             "home/.config/kagebunshin/store.age",
             "home/.config/kagebunshin/projects/widget.toml",
             "home/.local/state/kagebunshin/audit.jsonl",
+            "home/.local/state/kagebunshin/runs.jsonl",
             "home/.local/share/kagebunshin/proton/local.key",
             "home/.local/share/kagebunshin/proton/.kagebunshin-session",
             "home/.local/share/kagebunshin/proton.old/session",

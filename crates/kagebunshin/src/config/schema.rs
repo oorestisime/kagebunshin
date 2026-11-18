@@ -77,8 +77,6 @@ pub struct Config {
     #[serde(default)]
     pub sensitive_source_patterns: Vec<SourcePattern>,
     #[serde(default)]
-    pub audit: AuditConfig,
-    #[serde(default)]
     pub masking: MaskingConfig,
     /// Refuse to hold secret values in memory that cannot be locked, rather
     /// than warn and keep them in ordinary memory. See `docs/memory.md`.
@@ -137,7 +135,6 @@ impl Default for Config {
             approval_timeout: ApprovalTimeout::default(),
             default_provider: default_provider(),
             sensitive_source_patterns: Vec::new(),
-            audit: AuditConfig::default(),
             masking: MaskingConfig::default(),
             strict_memory: false,
             aws: AwsSettings::default(),
@@ -153,16 +150,6 @@ fn default_env() -> EnvName {
 
 fn default_provider() -> Provider {
     Provider::File
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct AuditConfig {
-    /// Also record runs in non-sensitive environments. Off by default:
-    /// sensitive access and denials are always recorded, dev runs only when
-    /// this is on.
-    #[serde(default)]
-    pub dev_runs: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

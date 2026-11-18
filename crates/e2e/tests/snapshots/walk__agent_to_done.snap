@@ -83,6 +83,7 @@ env: dev
 shared with other environments (marking dev sensitive leaves these unmarked unless noted; a human can mark them as well in the app):
   aws_sm:acme/dev/api  also read by mono-worker.dev
 every key set; `./test.sh` ran with them on <day>
+runs in the last day: 2, last at <time>
 
 (hook) start
 kagebunshin: this folder is in project api, registered with kagebunshin. Its secrets come from kagebunshin, not from a .env file: run commands that need them as `kagebunshin run -- COMMAND` (`--env ENV` for another environment). Writing a .env file here is refused. The kagebunshin skill has the rest.

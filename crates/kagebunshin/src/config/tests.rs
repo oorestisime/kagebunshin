@@ -235,11 +235,11 @@ fn typos_are_errors_with_a_line_number() {
 
     let err = parse_config(
         Path::new("/cfg/config.toml"),
-        "schema = 1\n[audit]\ndev_run = false\n",
+        "schema = 1\n[masking]\nmin_length = 8\n",
     )
     .unwrap_err()
     .to_string();
-    assert!(err.contains(":3:1: unknown field `dev_run`"), "{err}");
+    assert!(err.contains(":3:1: unknown field `min_length`"), "{err}");
 }
 
 #[test]
@@ -521,7 +521,6 @@ fn config_defaults_and_full() {
     assert_eq!(d.approval_timeout.get(), Duration::from_mins(5));
     assert_eq!(d.default_provider, Provider::File);
     assert!(d.sensitive_source_patterns.is_empty());
-    assert!(!d.audit.dev_runs);
     assert_eq!(d.masking.min_len.get(), 8);
     assert_eq!(parse_config(Path::new("c"), "schema = 1\n").unwrap(), d);
 
@@ -534,8 +533,6 @@ idle_timeout = "2h"
 approval_timeout = "90s"
 default_provider = "aws_sm"
 sensitive_source_patterns = ["*prod*", "*live*"]
-[audit]
-dev_runs = true
 [masking]
 min_len = 12
 "#,
@@ -546,7 +543,6 @@ min_len = 12
     assert_eq!(c.approval_timeout.get(), Duration::from_secs(90));
     assert_eq!(c.default_provider, Provider::AwsSm);
     assert_eq!(c.sensitive_source_patterns.len(), 2);
-    assert!(c.audit.dev_runs);
     assert_eq!(c.masking.min_len.get(), 12);
 
     let round = toml::to_string(&c).unwrap();

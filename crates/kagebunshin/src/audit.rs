@@ -7,6 +7,11 @@
 //! An [`Event`] holds names only: no field can hold a value, a passphrase
 //! or a program's arguments. The daemon writes the requests it answers; the CLI
 //! writes the config edits it makes itself.
+//!
+//! An ordinary `run`, one that needed no approval, is not in that file but
+//! in `runs.jsonl` beside it ([`AuditLog::runs`]), kept and moved aside the
+//! same way. So however many of them there are, they push nothing out of
+//! the audit log.
 
 use std::ffi::OsString;
 use std::fs;
@@ -20,8 +25,9 @@ use crate::ipc::protocol::{Caller, RemotePeer};
 use crate::types::{EnvName, ProjectName};
 
 pub const FILE: &str = "audit.jsonl";
-/// The size at which the log is moved to `audit.jsonl.1`, replacing the
-/// one before.
+/// The log of ordinary runs, beside [`FILE`].
+pub const RUNS_FILE: &str = "runs.jsonl";
+/// The size at which a log is moved to its `.1`, replacing the one before.
 pub const MAX_BYTES: u64 = 10 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -160,6 +166,15 @@ impl AuditLog {
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// The log of ordinary runs beside this one, `runs.jsonl`.
+    #[must_use]
+    pub fn runs(&self) -> Self {
+        Self {
+            path: self.path.with_file_name(RUNS_FILE),
+            max_bytes: self.max_bytes,
+        }
     }
 
     fn rotated(&self) -> PathBuf {
@@ -317,6 +332,30 @@ mod tests {
         assert_eq!(actions, ["unlock", "run"]);
         assert_eq!(unreadable, 0);
         assert_eq!(mode(&log.rotated()), 0o600);
+    }
+
+    /// The runs log is a file of its own: filling it moves nothing out of
+    /// the audit log.
+    #[test]
+    fn runs_rotate_apart_from_the_audit_log() {
+        let tmp = tempfile::tempdir().unwrap();
+        let log = AuditLog::new(tmp.path().join(FILE)).with_max_bytes(1);
+        let runs = log.runs();
+        assert_eq!(runs.path(), tmp.path().join(RUNS_FILE));
+        log.append(&event("unlock")).unwrap();
+        for _ in 0..3 {
+            runs.append(&event("run")).unwrap();
+        }
+        let actions = |log: &AuditLog| -> Vec<String> {
+            let (events, _) = log.read().unwrap();
+            events.into_iter().map(|e| e.action).collect()
+        };
+        assert_eq!(actions(&log), ["unlock"]);
+        assert!(!log.rotated().exists());
+        assert_eq!(actions(&runs), ["run", "run"]);
+        let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(runs.path()), 0o600);
+        assert_eq!(mode(&runs.rotated()), 0o600);
     }
 
     #[test]

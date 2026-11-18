@@ -9,7 +9,9 @@ Usage: kagebunshin audit [OPTIONS]
 Options:
       --json              Print machine-readable JSON; errors go to stderr as JSON
       --since <DURATION>  Only events this recent, such as 1h or 7d
+      --all               Also the runs that needed no approval
       --socket <PATH>     Daemon socket [default: $KAGEBUNSHIN_SOCKET, else a per-user runtime dir]
+      --action <ACTION>   Only this request or command, such as run or unlock
       --env <ENV>         Environment to use instead of the project's default
       --project <NAME>    Project to use instead of the one for this folder; it must claim this checkout's remotes
   -h, --help              Print help (see more with '--help')

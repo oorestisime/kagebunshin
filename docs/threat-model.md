@@ -381,10 +381,11 @@ What it does not cover:
 - The audit log is a plain file the user owns, written by the daemon and
   the CLI. A same-user process can edit or delete it, and edits made to
   project files directly, without the CLI, are not recorded. The program
-  name recorded for a `run` is what the caller sent. Not recorded: a
-  successful local `run` of values that are not marked, unless
-  `audit.dev_runs` is on; the connection's own `hello`, `ping` and `whoami`;
-  remote connections refused before a request (see Remote callers); and
-  locks from the idle timeout.
+  name recorded for a `run` is what the caller sent. A successful local
+  `run` of values that are not marked is recorded in `runs.jsonl` beside
+  it instead, and goes ahead when that file cannot be written: it is a
+  record of use, not a control. Not recorded: the connection's own
+  `hello`, `ping` and `whoami`; remote connections refused before a
+  request (see Remote callers); and locks from the idle timeout.
 - The daemon as a service runs with the service manager's environment, not
   your shell's; see [config.md](config.md#the-daemon-as-a-service).
