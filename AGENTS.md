@@ -31,5 +31,6 @@ cargo deny check
 `--workspace` matters: `kagebunshin-app` is not a default member, so plain
 `cargo clippy`/`cargo test` skip it. `cargo machete` should also stay clean.
 
-CI runs fmt, clippy and the tests on Linux and macOS for every pull
-request, but not the `e2e` crate, so the local run above is still the gate.
+CI runs fmt, clippy and the tests on Linux for every pull request, and
+the tests on macOS once it is merged, but not the `e2e` crate, so the
+local run above is still the gate.

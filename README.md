@@ -1,11 +1,32 @@
 <p align="center">
-  <img src="packaging/icons/kagebunshin.svg" width="72" alt="">
+  <img src="packaging/icons/kagebunshin.svg" width="112"
+       alt="The kagebunshin mark: a hooded figure over the layers of its clones">
 </p>
 
-# kagebunshin
+<h1 align="center">kagebunshin</h1>
 
-**Your coding agent runs your code with its secrets. It never has to see
-one.**
+<p align="center">
+  <b>Your coding agent runs your code with its secrets.<br>
+  It never has to see one.</b>
+</p>
+
+<p align="center">
+  <a href="https://github.com/oorestisime/kagebunshin/actions/workflows/ci.yml"><img src="https://github.com/oorestisime/kagebunshin/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+  <a href="https://github.com/oorestisime/kagebunshin/releases"><img src="https://img.shields.io/github/v/release/oorestisime/kagebunshin?include_prereleases&label=release" alt="Latest release"></a>
+  <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS-informational" alt="Linux and macOS">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license"></a>
+</p>
+
+<p align="center">
+  <a href="#get-started">Get started</a> ·
+  <a href="#why">Why</a> ·
+  <a href="#how-it-works">How it works</a> ·
+  <a href="#day-to-day">Day to day</a> ·
+  <a href="#the-name">The name</a> ·
+  <a href="#documentation">Docs</a>
+</p>
+
+---
 
 kagebunshin is a local secrets broker for Linux and macOS. Secrets stay
 where your team already keeps them: AWS Secrets Manager, a password
@@ -57,9 +78,31 @@ secret, only that it is there.
        alt="The app asks before a command gets a value marked sensitive: it shows the command, the key it wants, who asks and why.">
 </p>
 
+## How it works
+
+```mermaid
+sequenceDiagram
+    participant A as Coding agent
+    participant R as kagebunshin run
+    participant D as kagebunshin daemon
+    participant S as AWS, Proton Pass,<br/>local store
+    A->>R: kagebunshin run -- npm test
+    R->>D: this project's keys
+    D->>S: reads them
+    S-->>D: values
+    Note over D: Marked sensitive?<br/>Waits until you approve in the app
+    D-->>R: values
+    R->>R: runs npm test with them<br/>in its environment
+    R-->>A: output, values masked
+```
+
+The values go from where they live to the command that needs them. The
+agent is on neither end of that: it starts the command and reads what
+comes back.
+
 ## Get started
 
-**1. Install.**
+### 1. Install
 
 ```sh
 curl -fsSLO https://raw.githubusercontent.com/oorestisime/kagebunshin/main/packaging/install.sh
@@ -70,17 +113,22 @@ It asks you to choose a passphrase for the local store, starts the daemon,
 gives OpenCode and Claude Code the kagebunshin skill and hooks when it
 finds them, and on Linux puts the app in the tray.
 
-**2. Paste this into your agent**, in a project's checkout:
+### 2. Paste this into your agent
+
+In a project's checkout:
 
 ```text
 Set up kagebunshin here: run `kagebunshin next` and do what it says until it says done.
 ```
 
-Or name several checkouts at once:
+<details>
+<summary>Or name several checkouts at once</summary>
 
 ```text
 Set up kagebunshin in ~/code/widget and ~/code/blog: run `kagebunshin next ~/code/widget ~/code/blog` and do what it says until it says done.
 ```
+
+</details>
 
 The agent moves each `.env` into the encrypted store, which you approve
 once in the app, by key name. A secret that is in no file you type into
@@ -94,7 +142,9 @@ delete.
        alt="The app lists the env files an agent asks to import, where each goes and its keys by name, and takes the passphrase once.">
 </p>
 
-**3. That is it.** In a worktree or another clone of that project there is
+### 3. That is it
+
+In a worktree or another clone of that project there is
 nothing to do. In a new project, paste the same line; where the hooks are
 installed and the folder has a `.env` or a `.env.example`, the agent is
 told to run it without you.
@@ -116,6 +166,11 @@ Start your agent as usual, not with `run`: that would put every value in
 the agent's own environment. See [docs/agents.md](docs/agents.md) for the
 rest, and [docs/app.md](docs/app.md) for the app and its tray.
 
+<p align="center">
+  <img src="docs/img/keys.png" width="760"
+       alt="The app lists a project's keys by environment, grouped by the secret each comes from, and shows which are marked sensitive.">
+</p>
+
 Agents on other machines can ask too, over an endpoint on your tailnet
 that is off by default and where each machine needs a grant and its
 token. See
@@ -123,12 +178,13 @@ token. See
 
 ## What it does not do
 
-**Scoped, audited delivery, not invisibility.** kagebunshin decides which
-values reach which command and writes the decisions down. It does not make
-a value invisible to code that has it: a command that `run` starts can
-print its own environment, and approving a command trusts it. Masking
-covers the piped output of `run` and catches the accident, a value in a
-log line or a stack trace, not a determined reader.
+> [!IMPORTANT]
+> **Scoped, audited delivery, not invisibility.** kagebunshin decides which
+> values reach which command and writes the decisions down. It does not make
+> a value invisible to code that has it: a command that `run` starts can
+> print its own environment, and approving a command trusts it. Masking
+> covers the piped output of `run` and catches the accident, a value in a
+> log line or a stack trace, not a determined reader.
 
 On your own machine the boundary is soft: an agent runs as you and can use
 your AWS profile without kagebunshin, so give agent-facing environments a
@@ -137,10 +193,25 @@ agent on another machine and give it the remote endpoint. See
 [docs/threat-model.md](docs/threat-model.md) for exactly what is and is not
 protected.
 
+## The name
+
+影分身, *kage bunshin*, is the shadow clone technique from *Naruto*. A
+ninja splits into copies, real ones that can act, and sends them off to
+work at the same time. When a clone is done, what it learned comes back
+to the original.
+
+Coding agents are used the same way: several at once, each a clone of you
+in a worktree of its own, doing part of your work. A clone needs what you
+have to do that work. kagebunshin gives each clone's commands the secrets
+they need and keeps the values with the original.
+
 ## Status
 
-Alpha; the latest build is v0.0.1-alpha.10. It has binaries for Linux
-x86_64 and aarch64 (glibc 2.35 or later) and for macOS arm64. The macOS
+> [!NOTE]
+> **Alpha**; the latest build is v0.0.1-alpha.10.
+
+There are binaries for Linux x86_64 and aarch64 (glibc 2.35 or later)
+and for macOS arm64. The macOS
 binaries are unsigned, and no one has run them outside CI, which builds
 and tests them: expect rough edges there.
 
@@ -152,20 +223,19 @@ prerelease commit.
 
 ## Documentation
 
-- [docs/install.md](docs/install.md): install, upgrade, uninstall, from
-  source
-- [docs/agents.md](docs/agents.md): running coding agents with
-  kagebunshin, and what `kagebunshin next` does
-- [docs/manual-setup.md](docs/manual-setup.md): the same setup, by hand
-- [docs/app.md](docs/app.md): the app, the tray and approvals
-- [docs/project-files.md](docs/project-files.md): project mapping files,
-  sources and sensitivity
-- [docs/config.md](docs/config.md): `config.toml`, directories, environment
-  variables, the service
-- [docs/threat-model.md](docs/threat-model.md): what is protected, from
-  whom, and the known gaps
-- [docs/memory.md](docs/memory.md): how values are kept in memory
-- [docs/roadmap.md](docs/roadmap.md): what is agreed and not built yet
-- [SECURITY.md](SECURITY.md): reporting a vulnerability
+| Read | For |
+|---|---|
+| [Install](docs/install.md) | Install, upgrade, uninstall, from source |
+| [Agents](docs/agents.md) | Running coding agents with kagebunshin, and what `kagebunshin next` does |
+| [Manual setup](docs/manual-setup.md) | The same setup, by hand |
+| [The app](docs/app.md) | The app, the tray and approvals |
+| [Project files](docs/project-files.md) | Project mapping files, sources and sensitivity |
+| [Configuration](docs/config.md) | `config.toml`, directories, environment variables, the service |
+| [Threat model](docs/threat-model.md) | What is protected, from whom, and the known gaps |
+| [Memory](docs/memory.md) | How values are kept in memory |
+| [Roadmap](docs/roadmap.md) | What is agreed and not built yet |
+| [Security](SECURITY.md) | Reporting a vulnerability |
 
-License: MIT.
+## License
+
+[MIT](LICENSE).
