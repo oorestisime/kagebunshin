@@ -1,9 +1,9 @@
 # Install, upgrade, uninstall
 
 From a release, on Linux x86_64 and aarch64 with glibc 2.35 or later
-(Ubuntu 22.04, Debian 12). The aarch64 build is cross-compiled and has run
-only under emulation. macOS has no release build yet: build it from
-source, below.
+(Ubuntu 22.04, Debian 12), and on macOS arm64. The release workflow builds
+each on a machine of its own kind and smoke-tests it there; only the Linux
+x86_64 build is in daily use, and the macOS one is unsigned.
 
 ```sh
 curl -fsSLO https://raw.githubusercontent.com/oorestisime/kagebunshin/main/packaging/install.sh

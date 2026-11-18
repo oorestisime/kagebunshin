@@ -158,7 +158,14 @@ impl Instance {
 }
 
 fn hear(stream: &UnixStream) -> Option<Ask> {
-    stream.set_read_timeout(Some(HEAR)).ok()?;
+    match stream.set_read_timeout(Some(HEAR)) {
+        Ok(()) => {}
+        // macOS sets nothing on a socket whose other end has closed, as a
+        // launch has once it said its piece. Reading that one cannot
+        // wait: what was sent is there, and then the end.
+        Err(e) if cfg!(target_os = "macos") && e.kind() == io::ErrorKind::InvalidInput => {}
+        Err(_) => return None,
+    }
     let mut line = String::new();
     stream.take(MAX_ASK).read_to_string(&mut line).ok()?;
     Ask::parse(&line)

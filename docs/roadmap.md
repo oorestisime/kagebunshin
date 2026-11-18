@@ -18,9 +18,9 @@ What is left of v1 is release work:
   the machine that asked, and no token. `pass-cli` shows a token's expiry
   only in human-readable output, so `connect proton --expires` is typed
   by hand until it has a machine-readable form.
-- macOS: build and test it again. CI was off from 11 November 2026 until
-  the repository went public, and nothing compiled there in between; the
-  Release workflow builds the macOS tarball once it passes.
+- macOS: run it for real. CI builds and tests it and the Release
+  workflow ships an arm64 tarball, but no one has yet set it up on a Mac
+  from one: the service, the app and its approvals are untried there.
 - Signed and notarized macOS builds; a Homebrew tap from
   `packaging/homebrew/kagebunshin.rb`; `cargo install` from crates.io,
   which `publish = false` blocks today.
