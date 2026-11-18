@@ -140,10 +140,9 @@ protected.
 ## Status
 
 Alpha; the latest build is v0.0.1-alpha.10. It has binaries for Linux
-x86_64 and aarch64 (glibc 2.35 or later). macOS has no binary yet, and
-nothing has built or tested it there since CI last ran, on 11 November
-2026: build from source ([docs/install.md](docs/install.md)) and expect
-rough edges.
+x86_64 and aarch64 (glibc 2.35 or later) and for macOS arm64. The macOS
+binaries are unsigned, and no one has run them outside CI, which builds
+and tests them: expect rough edges there.
 
 AWS Secrets Manager and the local store are in daily use. Proton Pass
 has handed values from a real vault to a bot on another machine, through
