@@ -14,12 +14,8 @@ env:
 
 jobs:
   check:
-    name: fmt, clippy, test (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+    name: fmt, clippy, test
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
@@ -28,20 +24,15 @@ jobs:
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
       # `desktop-file-validate`, which the launcher's test runs.
-      - if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends desktop-file-utils
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends desktop-file-utils
       - run: cargo fmt --all --check
       - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo test --locked
 
   # The app is outside the default members, so the job above never builds it.
   app:
-    name: app (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+    name: app
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
@@ -51,14 +42,11 @@ jobs:
         with:
           key: app
       # Build headers, and lavapipe for headless rendering without a GPU.
-      - if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libxkbcommon-dev libwayland-dev mesa-vulkan-drivers
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libxkbcommon-dev libwayland-dev mesa-vulkan-drivers
       - run: cargo clippy -p kagebunshin-app --all-targets --locked -- -D warnings
       - run: cargo test -p kagebunshin-app --locked
-      - if: runner.os == 'Linux'
-        run: cargo build -p kagebunshin-app --locked
+      - run: cargo build -p kagebunshin-app --locked
       - name: Render every scene, light and dark
-        if: runner.os == 'Linux'
         env:
           VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.json
         run: |
@@ -69,11 +57,27 @@ jobs:
               target/debug/kagebunshin-app --snap "snaps/$scene-$theme.png" --scene "$scene" --theme "$theme"
             done
           done
-      - if: runner.os == 'Linux'
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: app-snaps
           path: snaps/
+
+  # macOS after a merge only: its runners are slow to come by, and a pull
+  # request should not wait for one. Tests alone, in one job: formatting
+  # is the same everywhere, and with RUSTFLAGS above the test build fails
+  # on a warning in the code that only macOS compiles.
+  macos:
+    name: test (macos-latest)
+    if: github.event_name == 'push'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked
+      - run: cargo test -p kagebunshin-app --locked
 
   deny:
     name: cargo-deny
