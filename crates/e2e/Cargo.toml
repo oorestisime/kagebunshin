@@ -1,0 +1,27 @@
+[package]
+name = "kagebunshin-e2e"
+description = "End-to-end tests of the kagebunshin binaries on a sandboxed machine, with the providers stubbed."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[lib]
+doctest = false
+
+[dev-dependencies]
+# Seeds the AWS Emulator, over its own certificate authority.
+aws-config = "1.13.2"
+aws-sdk-secretsmanager = { version = "1.127.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-smithy-http-client = { version = "1.5.2", features = ["rustls-aws-lc"] }
+insta = "1.49.0"
+kagebunshin = { path = "../kagebunshin", version = "0.0.1-alpha.10" }
+libc = "0.2.191"
+serde_json = "1"
+tempfile = "3.27.0"
+tokio = { version = "1.54.1", features = ["rt"] }

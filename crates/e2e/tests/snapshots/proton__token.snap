@@ -1,0 +1,114 @@
+---
+source: crates/e2e/tests/proton.rs
+expression: w.transcript()
+---
+######## 
+
+(human) $ kagebunshin unlock
+Passphrase for the local store: 
+unlocked
+
+$ kagebunshin project init web
+created project web with environment dev
+
+-- before Proton Pass is connected
+
+$ kagebunshin list --provider proton
+kagebunshin: cannot list proton: proton: credentials are missing or expired
+hint: run `kagebunshin connect proton`
+[exit 1]
+
+$ kagebunshin project add-source web dev --provider proton --prefix web/
+added a source to environment dev of project web; it replaces the default source, the local store's section, unless you add `--provider file` too
+
+$ kagebunshin run -- true
+kagebunshin: cannot resolve environment dev of project web: Proton Pass: credentials missing or expired (1 source, checked <time> UTC)
+ask the human: run `kagebunshin connect proton`
+[exit 1]
+
+$ kagebunshin next
+the environment cannot be resolved
+waiting on the human; tell them:
+  - Please run `kagebunshin connect proton` in a terminal, so kagebunshin can read proton (personal access token).
+nothing more you can do until the human has done the above
+
+-- the human connects it: first with a token Proton refuses
+
+(human) $ KAGEBUNSHIN_PROTON_TOKEN=$(cat $T/old-token) kagebunshin connect proton --expires 2099-01-31
+Passphrase for the local store: 
+checking the token with pass-cli, through the daemon
+kagebunshin: Proton refused the token
+hint: check the token, or create a new personal access token in Proton Pass and run `kagebunshin connect proton` again
+[exit 1]
+
+(human) $ KAGEBUNSHIN_PROTON_TOKEN=$(cat $T/token) kagebunshin connect proton --expires 2099-01-31
+Passphrase for the local store: 
+checking the token with pass-cli, through the daemon
+connected Proton Pass: the token reads 2 vaults; it is saved in the local store
+
+$ kagebunshin status
+daemon: unlocked
+providers:
+  proton  personal access token  ok
+project: web
+env: dev
+.env.example: none found
+2 keys
+  DATABASE_URL  proton:web/DATABASE_URL
+  STRIPE_KEY    proton:web/STRIPE_KEY
+
+$ kagebunshin list --provider proton
+3 matches
+  global/OPENAI_KEY  item i4  proton  OPENAI_KEY
+  web/DATABASE_URL   item i1  proton  DATABASE_URL
+  web/STRIPE_KEY     item i2  proton  STRIPE_KEY
+
+$ kagebunshin run -- sh -c 'echo database is ${DATABASE_URL:+set}, stripe is ${STRIPE_KEY:+set}'
+kagebunshin: warning: no .env.example found, so every key the environment has is passed (2 keys); `kagebunshin project example` writes one from the keys the code reads, to pass only those
+database is set, stripe is set
+
+-- one key from the shared vault, under another name
+
+$ kagebunshin project add-source web dev --provider proton --secret global/OPENAI_KEY --key OPENAI_API_KEY
+added a source to environment dev of project web
+
+$ kagebunshin run -- sh -c 'echo openai is ${OPENAI_API_KEY:+set}'
+kagebunshin: warning: no .env.example found, so every key the environment has is passed (3 keys); `kagebunshin project example` writes one from the keys the code reads, to pass only those
+openai is set
+
+-- the two-hour session ends: kagebunshin logs in again by itself
+
+$ kagebunshin sync
+web dev: 3 keys
+
+$ kagebunshin run -- sh -c 'echo database is ${DATABASE_URL:+set}'
+kagebunshin: warning: no .env.example found, so every key the environment has is passed (3 keys); `kagebunshin project example` writes one from the keys the code reads, to pass only those
+database is set
+
+-- the token is revoked in Proton
+
+$ kagebunshin run -- sh -c 'echo database is ${DATABASE_URL:+set}'
+kagebunshin: warning: no .env.example found, so every key the environment has is passed (3 keys); `kagebunshin project example` writes one from the keys the code reads, to pass only those
+database is set
+
+$ kagebunshin sync
+web dev: failed: cannot resolve environment dev of project web: Proton Pass: credentials missing or expired (2 sources, checked <time> UTC)
+kagebunshin: cannot resolve environment dev of project web: Proton Pass: credentials missing or expired (2 sources, checked <time> UTC)
+ask the human: Proton refused the saved token (expired or revoked?): create a new personal access token and run `kagebunshin connect proton`
+[exit 1]
+
+$ kagebunshin run -- true
+kagebunshin: cannot resolve environment dev of project web: Proton Pass: credentials missing or expired (2 sources, checked <time> UTC)
+ask the human: Proton refused the saved token (expired or revoked?): create a new personal access token and run `kagebunshin connect proton`
+[exit 1]
+
+$ kagebunshin status
+kagebunshin: cannot resolve environment dev of project web: Proton Pass: credentials missing or expired (2 sources, checked <time> UTC)
+ask the human: Proton refused the saved token (expired or revoked?): create a new personal access token and run `kagebunshin connect proton`
+[exit 1]
+
+$ kagebunshin next
+the environment cannot be resolved
+waiting on the human; tell them:
+  - Please run `kagebunshin connect proton` in a terminal, so kagebunshin can read proton (personal access token).
+nothing more you can do until the human has done the above

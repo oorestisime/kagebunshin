@@ -1,0 +1,78 @@
+---
+source: crates/e2e/tests/walk.rs
+expression: text
+---
+######## 61. Finding which secret holds a key (api)
+
+$ kagebunshin list --keys --prefix acme/dev/ --profile acme-dev
+4 matches
+  acme/dev/api      aws_sm  API_KEY, API_URL
+  acme/dev/db       aws_sm  DATABASE_URL
+  acme/dev/queue    aws_sm  QUEUE_URL
+  acme/dev/signing  aws_sm  (a plain string, not JSON)
+
+$ kagebunshin search DATABASE_URL --keys --profile acme-dev
+3 matches
+  acme/dev/db  aws_sm  DATABASE_URL
+  blog.dev     file    DATABASE_URL, LOG_LEVEL, PORT, SESSION_SECRET
+  shop.dev     file    DATABASE_URL, STRIPE_SECRET
+
+$ kagebunshin project facts
+checkout $T/work/api (remotes: github.com/acme/api)
+apps:
+  the repository root
+    .env.example: API_KEY, API_URL, DATABASE_URL, SIGNING_KEY, LOG_LEVEL (has a value)
+daemon: unlocked
+aws profiles:
+  acme-dev: usable, lists 7 secrets
+  acme-prod: not checked: it looks like production (has the part prod)
+secrets named in the checkout's files:
+  acme/dev/db: .github/workflows/deploy-dev.yml
+  acme/dev/api: .github/workflows/deploy-dev.yml
+  acme/prod/db: .github/workflows/deploy-prod.yml
+  acme/prod/api: .github/workflows/deploy-prod.yml
+  acme/dev/queue: scripts/seed.sh
+secret lists in the workflows, in their order:
+  .github/workflows/deploy-dev.yml:4 (environment dev): acme/dev/db, acme/dev/api
+  .github/workflows/deploy-prod.yml:11 (environment prod): acme/prod/db, acme/prod/api
+
+$ kagebunshin project draft
+draft of project api for the whole repository:
+  environment dev, its secrets as .github/workflows/deploy-dev.yml:4 lists them:
+    source: aws_sm secrets acme/dev/db, acme/dev/api (profile acme-dev)
+    holds: API_KEY, API_URL, DATABASE_URL
+    open points (the commands work once it is installed):
+    - SIGNING_KEY is in no secret read; secret acme/dev/signing is a plain string whose name is part of that key's, so it may be its value
+        kagebunshin project add-source api dev --provider aws_sm --secret acme/dev/signing --key SIGNING_KEY --profile acme-dev   (agent)
+    - LOG_LEVEL: no secret holds it, and .env.example gives it a value; only if .env.example's value is the real setting, not a placeholder; a secret belongs in the store or a provider
+        kagebunshin project set-var api dev LOG_LEVEL info   (agent)
+  environment prod, its secrets as .github/workflows/deploy-prod.yml:11 lists them:
+    source: aws_sm secrets acme/prod/db, acme/prod/api (profile acme-dev)
+  left out: AWS profile acme-prod: not checked: it looks like production (has the part prod)
+  found and unused: secret acme/dev/queue is named in scripts/seed.sh, and no workflow loads it
+  to install it: save it as api.toml, then `kagebunshin project apply api.toml`
+# Drafted by `kagebunshin project draft`. Check it with
+# `kagebunshin project apply FILE --check`.
+schema = 1
+remotes = ["github.com/acme/api"]
+profile = "acme-dev"
+# left out: AWS profile acme-prod: not checked: it looks like production (has the part prod)
+# found and unused: secret acme/dev/queue is named in scripts/seed.sh, and no workflow loads it
+
+[envs.dev]
+# its secrets as .github/workflows/deploy-dev.yml:4 lists them, in that order
+# open: SIGNING_KEY is in no secret read; secret acme/dev/signing is a plain string whose name is part of that key's, so it may be its value
+#   kagebunshin project add-source api dev --provider aws_sm --secret acme/dev/signing --key SIGNING_KEY --profile acme-dev
+# open: LOG_LEVEL: no secret holds it, and .env.example gives it a value; only if .env.example's value is the real setting, not a placeholder; a secret belongs in the store or a provider
+#   kagebunshin project set-var api dev LOG_LEVEL info
+
+[[envs.dev.sources]]
+provider = "aws_sm"
+secrets = ["acme/dev/db", "acme/dev/api"]
+
+[envs.prod]
+# its secrets as .github/workflows/deploy-prod.yml:11 lists them, in that order
+
+[[envs.prod.sources]]
+provider = "aws_sm"
+secrets = ["acme/prod/db", "acme/prod/api"]

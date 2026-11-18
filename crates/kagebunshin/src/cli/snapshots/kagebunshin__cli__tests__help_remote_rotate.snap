@@ -1,0 +1,19 @@
+---
+source: crates/kagebunshin/src/cli/mod.rs
+expression: text
+---
+Give a machine's grant for a project a new token, ending the old one
+
+Usage: kagebunshin remote rotate [OPTIONS] <MACHINE> <PROJECT>
+
+Arguments:
+  <MACHINE>  The machine, as its grant names it, or its node id
+  <PROJECT>  The project the grant is for
+
+Options:
+      --json            Print machine-readable JSON; errors go to stderr as JSON
+      --socket <PATH>   Daemon socket [default: $KAGEBUNSHIN_SOCKET, else a per-user runtime dir]
+      --env <ENV>       Environment to use instead of the project's default
+      --project <NAME>  Project to use instead of the one for this folder; it must claim this checkout's remotes
+  -h, --help            Print help (see more with '--help')
+  -V, --version         Print version

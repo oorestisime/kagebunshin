@@ -1,0 +1,18 @@
+---
+source: crates/kagebunshin/src/cli/mod.rs
+expression: text
+---
+List the names of AWS Secrets Manager secrets under a prefix (never values)
+
+Usage: kagebunshin aws list [OPTIONS] --prefix <PREFIX>
+
+Options:
+      --json               Print machine-readable JSON; errors go to stderr as JSON
+      --prefix <PREFIX>    List secrets whose name starts with this, e.g. widget/dev/
+      --profile <PROFILE>  The AWS profile [default: the ambient AWS configuration]
+      --socket <PATH>      Daemon socket [default: $KAGEBUNSHIN_SOCKET, else a per-user runtime dir]
+      --env <ENV>          Environment to use instead of the project's default
+      --region <REGION>    The AWS region [default: the profile's, or AWS_REGION]
+      --project <NAME>     Project to use instead of the one for this folder; it must claim this checkout's remotes
+  -h, --help               Print help
+  -V, --version            Print version

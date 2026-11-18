@@ -1,0 +1,136 @@
+---
+source: crates/e2e/tests/walk.rs
+expression: text
+---
+######## 56, 57. A new project can be read before its store section exists, and plain settings (shop)
+
+$ kagebunshin project init shop
+created project shop with environment dev
+
+$ kagebunshin status
+daemon: unlocked
+providers:
+  file  local store  ok
+project: shop
+env: dev
+0 keys
+missing (in .env.example, set by no source):
+  DATABASE_URL
+  STRIPE_SECRET
+  PORT
+to fill in what is missing:
+  you can run:
+    kagebunshin project set-var shop dev PORT 3000
+      (only if .env.example's value is the real setting, not a placeholder; a secret belongs in the store or a provider)
+  ask the human:
+    kagebunshin store set shop.dev DATABASE_URL STRIPE_SECRET
+      (it asks for the store passphrase, then each value)
+
+$ kagebunshin diff
+project: shop
+env: dev
+missing (in .env.example, set by no source):
+  DATABASE_URL
+  STRIPE_SECRET
+  PORT
+to fill in what is missing:
+  you can run:
+    kagebunshin project set-var shop dev PORT 3000
+      (only if .env.example's value is the real setting, not a placeholder; a secret belongs in the store or a provider)
+  ask the human:
+    kagebunshin store set shop.dev DATABASE_URL STRIPE_SECRET
+      (it asks for the store passphrase, then each value)
+kagebunshin: 3 keys in .env.example are not set by any source
+[exit 1]
+
+$ kagebunshin run -- ./test.sh
+kagebunshin: warning: 3 keys in .env.example are not set by any source: DATABASE_URL, STRIPE_SECRET, PORT
+MISSING DATABASE_URL
+MISSING STRIPE_SECRET
+MISSING PORT
+[exit 1]
+
+$ kagebunshin next
+project shop, environment dev: 0 of 3 keys set
+next (you): set PORT as a plain setting to .env.example's value, only if that is the real setting and not a placeholder (a secret belongs in the store or a provider)
+  kagebunshin project set-var shop dev PORT 3000
+waiting on the human; tell them:
+  - Please run `kagebunshin store set shop.dev DATABASE_URL STRIPE_SECRET` in a terminal; it asks for the store passphrase, then each value. Or open the kagebunshin app (`kagebunshin app`) and say when it is open: I then run it, and you type the values in the app's window.
+
+-- 57: a plain setting
+
+$ kagebunshin project set-var shop dev PORT 3000
+set PORT for environment dev of project shop
+
+$ kagebunshin status
+daemon: unlocked
+providers:
+  file  local store  ok
+project: shop
+env: dev
+1 key
+  PORT  project file  = 3000
+missing (in .env.example, set by no source):
+  DATABASE_URL
+  STRIPE_SECRET
+to fill in what is missing:
+  ask the human:
+    kagebunshin store set shop.dev DATABASE_URL STRIPE_SECRET
+      (it asks for the store passphrase, then each value)
+
+$ kagebunshin run --strict -- ./test.sh
+kagebunshin: 2 keys in .env.example are not set by any source: DATABASE_URL, STRIPE_SECRET
+[exit 1]
+
+$ kagebunshin next
+project shop, environment dev: 1 of 3 keys set
+waiting on the human; tell them:
+  - Please run `kagebunshin store set shop.dev DATABASE_URL STRIPE_SECRET` in a terminal; it asks for the store passphrase, then each value. Or open the kagebunshin app (`kagebunshin app`) and say when it is open: I then run it, and you type the values in the app's window.
+nothing more you can do until the human has done the above
+
+-- 56 again: the human sets both secrets with one passphrase prompt
+
+(human) $ kagebunshin store set shop.dev DATABASE_URL STRIPE_SECRET
+Passphrase for the local store: 
+Value for DATABASE_URL: 
+Value for STRIPE_SECRET: 
+added
+
+$ kagebunshin run --strict -- ./test.sh
+ok   DATABASE_URL
+ok   STRIPE_SECRET
+ok   PORT
+
+$ kagebunshin next
+project shop, environment dev: done. 3 of 3 keys set; `./test.sh` ran with them on <day>. They come from file:shop.dev (2), the project file (1).
+
+$ kagebunshin run -- sh -c 'echo "port is $PORT, db is $DATABASE_URL"'
+port is 3000, db is <redacted:DATABASE_URL>
+
+-- a source wins over a plain setting
+
+$ kagebunshin project set-var shop dev DATABASE_URL from-the-project-file
+set DATABASE_URL for environment dev of project shop
+
+$ kagebunshin status | grep -E 'DATABASE_URL|overrid'
+  DATABASE_URL   file:shop.dev
+
+$ kagebunshin project unset-var shop dev DATABASE_URL
+removed DATABASE_URL from environment dev of project shop
+
+-- known gap: a secret-looking name is accepted without a warning
+
+$ kagebunshin project set-var shop dev API_TOKEN abc
+set API_TOKEN for environment dev of project shop
+
+$ kagebunshin project unset-var shop dev API_TOKEN
+removed API_TOKEN from environment dev of project shop
+
+$ cat $HOME/.config/kagebunshin/projects/shop.toml
+schema = 1
+remotes = ["github.com/acme/shop"]
+
+[envs.dev]
+
+[envs.dev.vars]
+PORT = "3000"

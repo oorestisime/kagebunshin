@@ -1,0 +1,59 @@
+---
+source: crates/e2e/tests/aws.rs
+expression: w.transcript()
+---
+######## 
+
+$ kagebunshin project init app
+created project app with environment dev
+
+-- under a prefix
+
+$ kagebunshin project add-source app dev --provider aws_sm --prefix team/ --profile acme-dev
+added a source to environment dev of project app; it replaces the default source, the local store's section, unless you add `--provider file` too
+
+$ kagebunshin status
+daemon: unlocked
+providers:
+  aws_sm  profile acme-dev  ok
+project: app
+env: dev
+.env.example: none found
+1 key
+  OPEN  aws_sm:team/open
+warning: aws_sm prefix team/ (profile acme-dev): skipped secret team/closed, which this login may not read
+
+$ kagebunshin run -- sh -c 'echo open is ${OPEN:+set}, closed is ${CLOSED:-unset}'
+kagebunshin: warning: aws_sm prefix team/ (profile acme-dev): skipped secret team/closed, which this login may not read
+kagebunshin: warning: no .env.example found, so every key the environment has is passed (1 key); `kagebunshin project example` writes one from the keys the code reads, to pass only those
+open is set, closed is unset
+
+$ kagebunshin --json run --strict -- true
+{"warning":"aws_sm prefix team/ (profile acme-dev): skipped secret team/closed, which this login may not read"}
+{"warning":"no .env.example found, so every key the environment has is passed (1 key); `kagebunshin project example` writes one from the keys the code reads, to pass only those"}
+
+$ kagebunshin next
+project app, environment dev: done. 1 of 1 keys set; `true` ran with them on <day>. They come from aws_sm:team/open (1).
+suggested, not needed: this app has no .env.example, so a command run here gets the one key of the environment. One listing the keys the app reads from its environment, one `NAME=` to a line, names only, gives a command those and no more (kagebunshin found none in the code itself).
+
+$ kagebunshin list --keys --prefix team/ --profile acme-dev
+2 matches
+  team/closed  aws_sm  (keys not read: access to secret team/closed was denied)
+  team/open    aws_sm  OPEN
+
+-- named on its own
+
+$ kagebunshin project add-env app only
+added environment only to project app
+
+$ kagebunshin project add-source app only --provider aws_sm --secret team/closed --profile acme-dev
+added a source to environment only of project app; it replaces the default source, the local store's section, unless you add `--provider file` too
+
+$ kagebunshin --env only run -- true
+kagebunshin: cannot resolve environment only of project app: aws_sm secret team/closed (profile acme-dev): access to secret team/closed was denied
+hint: ask the human to let profile acme-dev read it (it needs secretsmanager:GetSecretValue on that secret); or, if this project does not need it, take it out: kagebunshin project remove-source app only 1
+[exit 1]
+
+$ kagebunshin --env only next
+the environment cannot be resolved
+next (you): cannot resolve environment only of project app: aws_sm secret team/closed (profile acme-dev): access to secret team/closed was denied; ask the human to let profile acme-dev read it (it needs secretsmanager:GetSecretValue on that secret); or, if this project does not need it, take it out: kagebunshin project remove-source app only 1

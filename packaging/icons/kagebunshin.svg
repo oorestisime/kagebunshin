@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1254 1254">
+  <!-- The shadow clone: a hooded figure over the layers of its clones, on
+       a dark tile. The tray mark in crates/kagebunshin-app/src/shell.rs is
+       the same figure, from kagebunshin-symbolic.svg. -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0.95" y2="1">
+      <stop offset="0" stop-color="#2F343F"/>
+      <stop offset="0.45" stop-color="#151920"/>
+      <stop offset="1" stop-color="#090B10"/>
+    </linearGradient>
+    <linearGradient id="silver" x1="0" y1="0" x2="0.8" y2="1">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="0.67" stop-color="#F4F5FA"/>
+      <stop offset="1" stop-color="#C6CAD3"/>
+    </linearGradient>
+  </defs>
+  <rect id="app-tile" x="91" y="91" width="1072" height="1072" rx="253" fill="url(#tile)" stroke="#474D5A" stroke-width="4"/>
+  <path id="ninja-and-clone-layers" fill="url(#silver)" fill-rule="evenodd" d="
+    M 365 894 L 368 908 L 379 919 L 599 1051 L 621 1058 L 634 1057 L 650 1051 L 867 917 L 876 906 L 878 899 L 877 889 L 867 876 L 856 871 L 839 872 L 647 991 L 630 997 L 619 997 L 605 993 L 404 872 L 388 871 L 379 874 L 369 883 Z
+    M 365 801 L 368 816 L 380 828 L 593 954 L 615 963 L 634 963 L 649 958 L 860 830 L 873 819 L 878 807 L 878 800 L 874 790 L 864 781 L 852 777 L 832 780 L 649 893 L 634 899 L 620 900 L 598 892 L 409 779 L 401 777 L 384 779 L 371 788 Z
+    M 790 607 L 728 631 L 664 662 L 711 674 L 733 674 L 743 671 L 757 663 L 771 647 Z
+    M 458 607 L 465 625 L 481 653 L 492 664 L 504 671 L 515 674 L 537 674 L 585 662 L 515 629 Z
+    M 634 197 L 621 196 L 605 200 L 576 220 L 497 298 L 453 352 L 425 398 L 389 472 L 332 605 L 317 649 L 316 670 L 320 685 L 328 699 L 341 712 L 402 750 L 497 799 L 444 757 L 377 698 L 370 689 L 363 673 L 363 651 L 370 634 L 387 612 L 454 548 L 550 467 L 580 446 L 604 435 L 613 433 L 641 434 L 667 445 L 687 458 L 752 510 L 822 573 L 864 616 L 879 639 L 883 651 L 884 666 L 881 678 L 873 692 L 837 726 L 751 798 L 835 754 L 893 718 L 912 701 L 924 678 L 925 652 L 916 620 L 855 471 L 836 429 L 806 372 L 770 322 L 713 259 L 663 212 L 650 203 Z
+  "/>
+</svg>

@@ -1,0 +1,36 @@
+---
+source: crates/e2e/tests/walk.rs
+expression: text
+---
+######## O. onboard several checkouts at once
+
+(human) $ kagebunshin onboard api mono
+onboarding 3 apps in 2 checkouts: 1 env file to import, 2 to draft
+  $T/work/api: draft new project api
+  $T/work/mono/apps/web: import .env into new project mono-web
+  $T/work/mono/apps/worker: draft new project mono-worker
+Passphrase for the local store (to import 1 .env file): 
+importing $T/work/mono/apps/web/.env into [mono-web.dev]
+writing 2 keys from 1 file to the local store
+drafting $T/work/api from the checkout and the providers
+drafting $T/work/mono from the checkout and the providers
+reading the state of api (1 of 3)
+reading the state of mono-web (2 of 3)
+reading the state of mono-worker (3 of 3)
+
+api ($T/work/api): drafted from the checkout, its workflows (environments dev, prod) and the providers, and installed, with 2 open points
+  environment dev: 3 of 5 keys set
+  needs your agent: set LOG_LEVEL as a plain setting to .env.example's value, only if that is the real setting and not a placeholder (a secret belongs in the store or a provider)
+
+mono-web ($T/work/mono/apps/web): created project mono-web with environment dev, and put 2 keys from .env in the local store's [mono-web.dev]: SESSION_SECRET, PUBLIC_URL
+  environment dev: 2 of 2 keys set
+  ready: your agent proves it with a run
+
+mono-worker ($T/work/mono/apps/worker): drafted from the checkout and the providers, and installed
+  environment dev: 2 of 2 keys set
+  ready: your agent proves it with a run
+
+Then, in each checkout above that is not done, paste this line into your coding agent:
+  Set up kagebunshin here: run `kagebunshin next` and do what it says until it says done.
+
+Delete $T/work/mono/apps/web/.env now that its values are in the store? [y/N] kept $T/work/mono/apps/web/.env; delete it once `kagebunshin run -- COMMAND` works

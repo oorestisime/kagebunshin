@@ -1,0 +1,23 @@
+---
+source: crates/kagebunshin/src/cli/mod.rs
+expression: text
+---
+Change the AWS profile or region of an environment's aws_sm sources
+
+Usage: kagebunshin project set-source [OPTIONS] <PROJECT> <ENV> [SOURCE]
+
+Arguments:
+  <PROJECT>  The project
+  <ENV>      The environment
+  [SOURCE]   Which source, from 1
+
+Options:
+      --all                Every aws_sm source of the environment
+      --json               Print machine-readable JSON; errors go to stderr as JSON
+      --profile <PROFILE>  The AWS profile
+      --socket <PATH>      Daemon socket [default: $KAGEBUNSHIN_SOCKET, else a per-user runtime dir]
+      --env <ENV>          Environment to use instead of the project's default
+      --region <REGION>    The AWS region
+      --project <NAME>     Project to use instead of the one for this folder; it must claim this checkout's remotes
+  -h, --help               Print help (see more with '--help')
+  -V, --version            Print version

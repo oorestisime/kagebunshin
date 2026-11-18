@@ -1,0 +1,62 @@
+[package]
+name = "kagebunshin"
+description = "A local secrets broker that gives each agent a scoped shadow clone of your secrets."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+# age 0.12 pulls in p256 (crypto-bigint 0.5, RUSTSEC-2026-0387) for recipient types
+# the store never uses; the maintained 0.11 line has the same scrypt passphrase format.
+age = { version = "0.11.5", default-features = false }
+aho-corasick = "1.1.5"
+async-trait = "0.1.92"
+# credentials-login: profiles made by `aws login` (login_session).
+aws-config = { version = "1.13.2", features = ["credentials-login"] }
+aws-credential-types = "1.3.1"
+aws-runtime = "1.10.4"
+# The real filesystem and environment, to list the AWS profiles `import` checks.
+aws-types = "1.7.0"
+aws-sdk-secretsmanager = { version = "1.127.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
+# bytes, http-body-util, hyper and hyper-util: the remote endpoint's HTTP,
+# with the versions the AWS SDK already brings in.
+bytes = "1.12.1"
+clap = { version = "4.6.7", features = ["derive"] }
+futures = "0.3.34"
+# The random bytes of a remote grant's token.
+getrandom = "0.4.3"
+http-body-util = "0.1.5"
+hyper = { version = "1.12.0", features = ["http1", "server", "client"] }
+hyper-util = { version = "0.1.21", features = ["tokio"] }
+libc = "0.2.191"
+rpassword = "7.5.5"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+# The store keeps a remote grant's token as its SHA-256, compared in
+# constant time.
+sha2 = "0.10.9"
+subtle = "2.6.1"
+thiserror = "2.0.21"
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "net", "io-util", "macros", "signal", "time", "sync"] }
+toml = { version = "1.2", default-features = false, features = ["std", "parse", "serde", "display"] }
+toml_edit = { version = "0.25", default-features = false, features = ["parse", "display"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
+zeroize = "1.9.1"
+
+[dev-dependencies]
+# test-util: config resolution against an in-memory environment and ~/.aws.
+aws-config = { version = "1.13.2", features = ["test-util"] }
+aws-smithy-http-client = { version = "1.5.2", features = ["test-util"] }
+aws-smithy-types = "1.9.4"
+http = "1"
+insta = "1.49.0"
+proptest = { version = "1", default-features = false, features = ["std"] }
+tempfile = "3.27.0"
+tokio = { version = "1.54.1", features = ["test-util"] }

@@ -1,0 +1,26 @@
+---
+source: crates/kagebunshin/src/cli/mod.rs
+expression: text
+---
+Add a source to an environment; a later source wins over an earlier one
+
+Usage: kagebunshin project add-source [OPTIONS] --provider <PROVIDER> <PROJECT> <ENV>
+
+Arguments:
+  <PROJECT>  The project
+  <ENV>      The environment
+
+Options:
+      --json                 Print machine-readable JSON; errors go to stderr as JSON
+      --provider <PROVIDER>  Where the values come from: AWS Secrets Manager, the local store or Proton Pass [possible values: aws_sm, file, proton]
+      --prefix <PREFIX>      Read every secret whose name starts with this
+      --socket <PATH>        Daemon socket [default: $KAGEBUNSHIN_SOCKET, else a per-user runtime dir]
+      --env <ENV>            Environment to use instead of the project's default
+      --secret <NAME>        Read one secret (for file: a store section, e.g. widget.dev; for proton: vault/KEY); repeat to read several, a later one winning a key two set
+      --key <KEY>            The secret's whole string is this key's value, not a JSON object (for proton: rename the key); takes exactly one --secret
+      --project <NAME>       Project to use instead of the one for this folder; it must claim this checkout's remotes
+      --profile <PROFILE>    aws_sm only: the AWS profile for this source
+      --region <REGION>      aws_sm only: the AWS region for this source
+      --optional             If the source fails, resolve the environment without it
+  -h, --help                 Print help (see more with '--help')
+  -V, --version              Print version

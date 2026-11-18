@@ -1,0 +1,20 @@
+---
+source: crates/kagebunshin/src/cli/mod.rs
+expression: sub.clone().render_help().to_string()
+---
+Connect a provider: set up its credentials and check they work
+
+Usage: kagebunshin connect [OPTIONS] <COMMAND>
+
+Commands:
+  aws     Pick an AWS profile, log in if needed, check it can list secrets, and make it the default
+  proton  Save a Proton Pass personal access token in the local store, after checking it logs in
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+      --json            Print machine-readable JSON; errors go to stderr as JSON
+      --socket <PATH>   Daemon socket [default: $KAGEBUNSHIN_SOCKET, else a per-user runtime dir]
+      --env <ENV>       Environment to use instead of the project's default
+      --project <NAME>  Project to use instead of the one for this folder; it must claim this checkout's remotes
+  -h, --help            Print help
+  -V, --version         Print version

@@ -1,0 +1,17 @@
+---
+source: crates/kagebunshin/src/cli/mod.rs
+expression: sub.clone().render_help().to_string()
+---
+Print instructions that teach a coding agent to set up and use kagebunshin
+
+Usage: kagebunshin init [OPTIONS] --agent
+
+Options:
+      --agent           For a coding agent (the only kind of init so far)
+      --json            Print machine-readable JSON; errors go to stderr as JSON
+      --skill           As an OpenCode skill (SKILL.md, with its front matter)
+      --socket <PATH>   Daemon socket [default: $KAGEBUNSHIN_SOCKET, else a per-user runtime dir]
+      --env <ENV>       Environment to use instead of the project's default
+      --project <NAME>  Project to use instead of the one for this folder; it must claim this checkout's remotes
+  -h, --help            Print help (see more with '--help')
+  -V, --version         Print version

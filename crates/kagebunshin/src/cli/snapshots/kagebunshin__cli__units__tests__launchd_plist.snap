@@ -1,0 +1,42 @@
+---
+source: crates/kagebunshin/src/cli/units.rs
+expression: plist
+---
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Written by `kagebunshin daemon install`; `kagebunshin daemon uninstall` removes it. -->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>io.github.oorestisime.kagebunshin</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Users/o/.cargo/bin/kagebunshin</string>
+		<string>--socket</string>
+		<string>/var/folders/xy/T/kagebunshin/kagebunshind.sock</string>
+		<string>daemon</string>
+		<string>run</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+	<key>SoftResourceLimits</key>
+	<dict>
+		<key>Core</key>
+		<integer>0</integer>
+	</dict>
+	<key>HardResourceLimits</key>
+	<dict>
+		<key>Core</key>
+		<integer>0</integer>
+	</dict>
+	<key>Umask</key>
+	<integer>63</integer>
+	<key>StandardErrorPath</key>
+	<string>/Users/o/Library/Logs/kagebunshin/daemon.log</string>
+</dict>
+</plist>

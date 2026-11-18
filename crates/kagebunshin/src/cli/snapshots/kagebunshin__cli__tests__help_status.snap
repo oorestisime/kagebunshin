@@ -1,0 +1,16 @@
+---
+source: crates/kagebunshin/src/cli/mod.rs
+expression: sub.clone().render_help().to_string()
+---
+Show the daemon and where each key comes from
+
+Usage: kagebunshin status [OPTIONS]
+
+Options:
+      --json               Print machine-readable JSON; errors go to stderr as JSON
+      --machine <MACHINE>  Ask machine MACHINE's daemon over Tailscale instead of this one's, sending its grant's token from KAGEBUNSHIN_REMOTE_TOKEN; with --project, outside a git checkout too
+      --socket <PATH>      Daemon socket [default: $KAGEBUNSHIN_SOCKET, else a per-user runtime dir]
+      --env <ENV>          Environment to use instead of the project's default
+      --project <NAME>     Project to use instead of the one for this folder; it must claim this checkout's remotes
+  -h, --help               Print help
+  -V, --version            Print version

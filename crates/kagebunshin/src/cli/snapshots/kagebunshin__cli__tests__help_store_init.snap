@@ -1,0 +1,15 @@
+---
+source: crates/kagebunshin/src/cli/mod.rs
+expression: text
+---
+Create the store, choosing its passphrase, and unlock the daemon with it
+
+Usage: kagebunshin store init [OPTIONS]
+
+Options:
+      --json            Print machine-readable JSON; errors go to stderr as JSON
+      --socket <PATH>   Daemon socket [default: $KAGEBUNSHIN_SOCKET, else a per-user runtime dir]
+      --env <ENV>       Environment to use instead of the project's default
+      --project <NAME>  Project to use instead of the one for this folder; it must claim this checkout's remotes
+  -h, --help            Print help
+  -V, --version         Print version

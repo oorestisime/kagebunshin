@@ -1,0 +1,62 @@
+---
+source: crates/e2e/tests/walk.rs
+expression: text
+---
+######## 60. Hooks
+
+(hook) bash cp .env.example .env
+DENY: kagebunshin: $T/work/api/.env is in project api, whose secrets come from kagebunshin, so writing a .env file there is refused. Run the command that needs the secrets as `kagebunshin run -- COMMAND` instead; to add or change a secret, ask the human.
+
+(hook) bash echo "A=1" > .env
+DENY: kagebunshin: $T/work/api/.env is in project api, whose secrets come from kagebunshin, so writing a .env file there is refused. Run the command that needs the secrets as `kagebunshin run -- COMMAND` instead; to add or change a secret, ask the human.
+
+(hook) bash cat > .env.local <<EOF
+DENY: kagebunshin: $T/work/api/.env.local is in project api, whose secrets come from kagebunshin, so writing a .env file there is refused. Run the command that needs the secrets as `kagebunshin run -- COMMAND` instead; to add or change a secret, ask the human.
+
+(hook) bash tee .env.production
+DENY: kagebunshin: $T/work/api/.env.production is in project api, whose secrets come from kagebunshin, so writing a .env file there is refused. Run the command that needs the secrets as `kagebunshin run -- COMMAND` instead; to add or change a secret, ask the human.
+
+(hook) write .env
+DENY: kagebunshin: $T/work/api/.env is in project api, whose secrets come from kagebunshin, so writing a .env file there is refused. Run the command that needs the secrets as `kagebunshin run -- COMMAND` instead; to add or change a secret, ask the human.
+
+-- allowed
+
+(hook) bash cat .env.example
+(nothing: the hook stays out of the way)
+
+(hook) bash echo hi > .env.example
+(nothing: the hook stays out of the way)
+
+(hook) bash grep FOO .env
+(nothing: the hook stays out of the way)
+
+(hook) write .env.example
+(nothing: the hook stays out of the way)
+
+-- known limits
+
+(hook) bash cp .env.example .env.sample
+DENY: kagebunshin: $T/work/api/.env.sample is in project api, whose secrets come from kagebunshin, so writing a .env file there is refused. Run the command that needs the secrets as `kagebunshin run -- COMMAND` instead; to add or change a secret, ask the human.
+
+(hook) bash sh -c 'echo A=1 > .env'
+(nothing: the hook stays out of the way)
+
+-- session start, in an app that is registered and not yet proven
+
+(hook) start
+kagebunshin: this folder is in project mono-worker, registered with kagebunshin. Its secrets come from kagebunshin, not from a .env file: run commands that need them as `kagebunshin run -- COMMAND` (`--env ENV` for another environment). Writing a .env file here is refused. The kagebunshin skill has the rest. It has not been shown to work yet: run `kagebunshin next` and do what it says.
+
+-- session start, at the root of a repository of several apps
+
+(hook) start
+kagebunshin: this repository has one kagebunshin project per folder: mono-web (apps/web), mono-worker (apps/worker). Their secrets come from kagebunshin, not from a .env file: in one of those folders, run commands that need them as `kagebunshin run -- COMMAND` (`--env ENV` for another environment). Writing a .env file there is refused. The kagebunshin skill has the rest. Not all of them have been shown to work yet: run `kagebunshin next` and do what it says.
+
+-- session start, in no project, with only a .env.example
+
+(hook) start
+kagebunshin: kagebunshin is installed on this machine and can hold this checkout's secrets instead of a .env file. To set the project up, run `kagebunshin next` and do what it says.
+
+-- session start, in no project, with no env files
+
+(hook) start
+(nothing: the hook stays out of the way)

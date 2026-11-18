@@ -1,0 +1,19 @@
+---
+source: crates/kagebunshin/src/cli/mod.rs
+expression: sub.clone().render_help().to_string()
+---
+Write a copy of a project's mapping file (no secret values) to hand to someone
+
+Usage: kagebunshin export [OPTIONS] <PROJECT>
+
+Arguments:
+  <PROJECT>  The project whose mapping file to copy
+
+Options:
+      --json            Print machine-readable JSON; errors go to stderr as JSON
+  -o, --output <PATH>   Write to this file instead of stdout
+      --socket <PATH>   Daemon socket [default: $KAGEBUNSHIN_SOCKET, else a per-user runtime dir]
+      --env <ENV>       Environment to use instead of the project's default
+      --project <NAME>  Project to use instead of the one for this folder; it must claim this checkout's remotes
+  -h, --help            Print help
+  -V, --version         Print version

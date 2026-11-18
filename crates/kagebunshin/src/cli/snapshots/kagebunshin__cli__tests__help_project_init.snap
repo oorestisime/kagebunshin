@@ -1,0 +1,21 @@
+---
+source: crates/kagebunshin/src/cli/mod.rs
+expression: text
+---
+Create a project, identified by its git remotes, with one environment
+
+Usage: kagebunshin project init [OPTIONS] <NAME>
+
+Arguments:
+  <NAME>  The project's name, also its file's: projects/<NAME>.toml
+
+Options:
+      --json               Print machine-readable JSON; errors go to stderr as JSON
+      --remote <URL>       A git remote of the project; repeat for several [default: the remotes of the checkout this runs in]
+      --profile <PROFILE>  The AWS profile for the project's aws_sm sources
+      --socket <PATH>      Daemon socket [default: $KAGEBUNSHIN_SOCKET, else a per-user runtime dir]
+      --env <ENV>          Environment to use instead of the project's default
+      --path <DIR>         The app's folder, for a repository with one project per app; commands run in it or below it use this project
+      --project <NAME>     Project to use instead of the one for this folder; it must claim this checkout's remotes
+  -h, --help               Print help (see more with '--help')
+  -V, --version            Print version

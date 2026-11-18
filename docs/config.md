@@ -1,0 +1,206 @@
+# Configuration
+
+## Where things live
+
+```text
+$KAGEBUNSHIN_CONFIG_DIR, else $XDG_CONFIG_HOME/kagebunshin, else ~/.config/kagebunshin
+├── config.toml          optional; below
+├── store.age            the local encrypted store
+└── projects/
+    └── <name>.toml      one per project; see project-files.md
+
+$XDG_STATE_HOME/kagebunshin, else ~/.local/state/kagebunshin
+├── audit.jsonl          the audit log, mode 0600, rotated to audit.jsonl.1 at 10 MiB
+├── proofs.json          the last `run --strict` that worked, per environment
+├── imported.json        the env files `onboard` imported and left in place:
+│                        path, size and time, so they are not named again
+└── left-out.json        the app folders `onboard --exclude` left out, so
+                         they stay out when their checkout is set up again
+
+Socket: $KAGEBUNSHIN_SOCKET, else $XDG_RUNTIME_DIR/kagebunshin/kagebunshind.sock
+        (Linux) or $TMPDIR/kagebunshin/kagebunshind.sock (macOS)
+```
+
+The same layout is used on Linux and macOS. The daemon reads the config
+directory again on every request, so edits apply without a restart.
+
+## `config.toml`
+
+Every field but `schema` has a default; a missing file means all defaults.
+Unknown fields are refused.
+
+```toml
+schema = 1
+
+default_env = "dev"           # the environment used when --env is not given
+idle_timeout = "30m"          # lock after this long without a request; s, m, h or d, at most 30d
+approval_timeout = "5m"       # deny a request nobody answers in the app after this long; s or m, at most 30m
+default_provider = "file"     # the source an environment with none gets: "file" (the store) or "aws_sm"
+strict_memory = false         # refuse values that cannot be locked in memory, rather than warn
+
+# Extra globs (`*` only) for names that look like production. An environment
+# they match waits for a human decision. See project-files.md.
+sensitive_source_patterns = ["*-prod*"]
+
+[audit]
+dev_runs = false              # also record runs in environments that are not sensitive
+
+[masking]
+min_len = 8                   # values shorter than this are not masked in piped output
+
+[remote]
+port = 47317                  # the remote endpoint's TCP port, and the one --machine connects to
+```
+
+Sensitive access and every denial are always recorded, whatever
+`audit.dev_runs` says.
+
+## Environment variables
+
+| Variable | |
+|---|---|
+| `KAGEBUNSHIN_CONFIG_DIR` | the config directory |
+| `KAGEBUNSHIN_SOCKET` | the socket path, absolute |
+| `KAGEBUNSHIN_LOG` | the daemon's log filter (`tracing` syntax), default `info` |
+| `XDG_CONFIG_HOME`, `XDG_STATE_HOME`, `XDG_RUNTIME_DIR`, `TMPDIR` | as above |
+
+AWS sources use the usual AWS configuration (`AWS_CONFIG_FILE`,
+`AWS_PROFILE`, SSO caches and so on) as the daemon sees it.
+
+## The daemon as a service
+
+`kagebunshin setup` does this, after creating the config directory and
+the store, and then unlocks the daemon; `--no-service` skips the service
+and unlocks a daemon you run yourself. Run again, it asks for the existing
+passphrase and checks it before reinstalling.
+
+On Linux, where `kagebunshin-app` is installed, `setup` also writes what
+`kagebunshin app install` writes: a launcher entry
+(`~/.local/share/applications/io.github.oorestisime.kagebunshin.desktop`),
+a login entry that starts the app in the tray
+(`~/.config/autostart/io.github.oorestisime.kagebunshin.desktop`) and the
+icon both name, under `~/.local/share/icons/hicolor/`. The entries run the
+installing binary's `app` on the socket the install resolved. Each file is
+marked as kagebunshin's; one of the same name that is not, or a symlink,
+is left alone. `--no-service` skips them too, and `kagebunshin app
+uninstall` removes them. To keep the app out of login, replace the login
+entry with one of your own that says `Hidden=true`.
+
+`kagebunshin app` starts the app, waits until it is up and returns to the
+prompt; `--hidden` starts it in the tray with no window. Where the daemon
+is a systemd user service for the same socket, the app is started as one
+beside it, `kagebunshin-app.service`:
+
+- It is a transient unit, made with `systemd-run` when the app is asked
+  for, so there is no unit file. It is given the display, session bus and
+  desktop variables of the session that asked, and otherwise the service
+  manager's environment.
+- A failed app is restarted, at most five times in thirty seconds, and it
+  stops with `graphical-session.target`. What it prints is in
+  `journalctl --user -u kagebunshin-app`.
+- `setup`, and so an upgrade with `install.sh`, restarts a running app on
+  the new build, as it does the daemon; so does `app install`. An app that
+  was started some other way is told to quit and started as the unit.
+  With no app running, none is started, except by the `setup` that
+  creates the store, in a session with a display: the first import an
+  agent asks for waits in the app for your approval.
+- `kagebunshin uninstall` stops it.
+
+With `--no-service`, and on macOS, the app is instead started in a session
+of its own, so Ctrl+C in the terminal and closing it do not end the app,
+and nothing restarts it.
+
+`kagebunshin daemon install` writes a systemd user unit,
+`~/.config/systemd/user/kagebunshin.service`, or a launchd agent,
+`~/Library/LaunchAgents/io.github.oorestisime.kagebunshin.plist`, that runs
+the installing binary on the socket the install resolved, and starts it.
+The daemon starts locked, so reinstalling locks it. `daemon status` shows
+whether it is installed and answering; `daemon uninstall` removes it.
+Logs go to the journal (`journalctl --user -u kagebunshin`) or to
+`~/Library/Logs/kagebunshin/daemon.log`.
+
+The service does not inherit your shell's environment. Only the socket
+path is written into the unit, so:
+
+- A custom `KAGEBUNSHIN_CONFIG_DIR`, `XDG_CONFIG_HOME` or `XDG_STATE_HOME`
+  is not seen by the service, which then uses the default directories.
+  Run the daemon yourself (`kagebunshin daemon &`) if you need them.
+- `PATH` is the service manager's, not yours. An AWS profile that uses
+  `credential_process` with a program found through your `PATH`, or
+  `AWS_PROFILE` and other `AWS_*` variables set in your shell, will not
+  work from the service. SSO profiles (`aws sso login`) work, since they
+  read the cache under `~/.aws`. Use absolute paths in `credential_process`.
+- On Linux, raise the locked-memory limit with `LimitMEMLOCK=` in a drop-in
+  if you hold many values; see [memory.md](memory.md#the-budget).
+
+## The remote endpoint
+
+Another machine on your tailnet can run `run`, `status` and `diff`
+against this daemon, so a bot there needs none of your credentials. It is
+off until you turn it on, and each machine needs a grant and the grant's
+token:
+
+```sh
+kagebunshin remote enable                        # asks for the passphrase
+kagebunshin remote grant laptop widget dev ci    # project widget, envs dev and ci; prints the token
+kagebunshin remote grant laptop widget dev --until 2026-12-31
+kagebunshin remote rotate laptop widget          # a new token, ending the old one
+kagebunshin remote revoke laptop [widget]
+kagebunshin status                               # where it listens, and the grants
+```
+
+On the other machine, with the token `remote grant` printed:
+
+```sh
+export KAGEBUNSHIN_REMOTE_TOKEN=kbr_…
+kagebunshin run --machine desk -- npm test
+kagebunshin status --machine desk
+kagebunshin diff --machine desk
+kagebunshin run --machine desk --project widget -- ./bot   # in any folder
+```
+
+- The daemon listens on this machine's IPv4 tailnet address and `[remote]
+  port` only, while the store turns it on, the daemon has been unlocked
+  and Tailscale is running. It never falls back to another address; when
+  it cannot listen, `status` says why.
+- Each connection is identified by the local tailscaled (machine, user,
+  tags). One it cannot identify, and this machine itself, are refused.
+- A grant holds the machine's Tailscale node id, so a different machine
+  renamed to the granted name gets nothing. Grants and the on/off switch
+  live in the encrypted store, so each change takes the passphrase.
+- A grant has a token, which the machine sends with every request as
+  well as being the machine Tailscale says it is. `remote grant` and
+  `remote rotate` print it once, and the store keeps only its hash:
+  rotate for a new one if it is lost. Granting again replaces the grant
+  and its token. A grant made before tokens lets nothing through until it
+  is rotated or made again. The token is not the store's passphrase and
+  unlocks nothing here. `run` takes it out of the environment of the
+  command it starts.
+- The app lists the grants under Remote agents, where each can be given a new
+  token or revoked. Making one stays with `remote grant`.
+- In a checkout the project is found by its git remotes, as it is
+  locally. With `--project` the name is enough, in any folder and with no
+  git installed: the remotes are only what the other machine reports, and
+  the grant already says which projects it may use. Of a project no grant
+  of its names, a machine learns nothing, not even whether there is one.
+- A locked daemon refuses remote callers, and they cannot unlock it.
+  Their requests do not reset the idle timeout. What fixes a refusal
+  (unlocking, opening the app, a grant) is done on this machine, and the
+  caller is told so.
+- Values marked sensitive still need approving in the app here. The
+  prompt names the machine and its user, and shows the command line as
+  that machine reported it: nothing here can check it. Each machine has
+  at most one prompt waiting; a second request is refused.
+- Every remote request is in the audit log, with the machine, its user
+  and tags.
+- `--machine` finds the machine through this machine's tailscaled, and
+  uses this machine's `[remote] port`. Where there is no tailscaled, as in
+  a sandbox that reaches the tailnet through a proxy, give the machine's
+  full name (`desk.example.ts.net`), which is looked up like any other.
+- The endpoint is HTTP: `POST /v1` with a request as JSON, answered with
+  a reply as JSON, the token in `Authorization: Bearer`, and the caller's
+  build in `kagebunshin-build`, which has to be the daemon's. While a
+  `run` waits for approval the reply stays open, with a newline every 15
+  seconds. It is plain HTTP on the tailnet, which Tailscale encrypts
+  between the two machines; see
+  [threat-model.md](threat-model.md#remote-callers) for what that leaves.

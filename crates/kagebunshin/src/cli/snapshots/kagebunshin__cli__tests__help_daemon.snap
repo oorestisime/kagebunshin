@@ -1,0 +1,24 @@
+---
+source: crates/kagebunshin/src/cli/mod.rs
+expression: sub.clone().render_help().to_string()
+---
+Run the daemon in the foreground or as a service, or check on it
+
+Usage: kagebunshin daemon [OPTIONS] [COMMAND]
+
+Commands:
+  run        Run the daemon in the foreground (the default)
+  ping       Check that the daemon is up and answering
+  whoami     Show the caller identity the daemon sees for this process
+  install    Run the daemon as a user service, started now and at login
+  uninstall  Stop the user service and remove its unit
+  status     Show whether the service is installed and the daemon answers
+  help       Print this message or the help of the given subcommand(s)
+
+Options:
+      --json            Print machine-readable JSON; errors go to stderr as JSON
+      --socket <PATH>   Daemon socket [default: $KAGEBUNSHIN_SOCKET, else a per-user runtime dir]
+      --env <ENV>       Environment to use instead of the project's default
+      --project <NAME>  Project to use instead of the one for this folder; it must claim this checkout's remotes
+  -h, --help            Print help
+  -V, --version         Print version

@@ -1,0 +1,182 @@
+---
+source: crates/e2e/tests/walk.rs
+expression: text
+---
+######## 76. Env files under other names (.dev.env, production.env) go in with --file
+
+$ kagebunshin next
+this checkout is in no kagebunshin project
+next (you): draft this folder's project from what the checkout and the connected providers say, and apply it
+  kagebunshin project draft --apply
+waiting on the human; tell them:
+  - 2 more files here hold values in plain text that were not imported into kagebunshin: .dev.env, production.env. To import one, say which environment its values are for: I run its line with that as ENV, and you approve it in the kagebunshin app with the store passphrase. Or run it in a terminal yourself: `kagebunshin onboard --file $T/work/site/.dev.env --env ENV`, `kagebunshin onboard --file $T/work/site/production.env --env ENV`. Delete one that is not needed.
+
+-- onboard takes neither by itself, and says so
+
+(human) $ kagebunshin onboard
+onboarding $T/work/site: draft new project site
+drafting $T/work/site from the checkout and the providers
+reading the state of site
+
+site ($T/work/site): drafted from the checkout and the providers, and installed, with 1 open point
+  environment dev: 0 of 2 keys set
+  needs you:
+    - Please run `kagebunshin store set site.dev API_TOKEN SITE_URL` in a terminal; it asks for the store passphrase, then each value. Or open the kagebunshin app (`kagebunshin app`) and say when it is open: I then run it, and you type the values in the app's window.
+
+not imported: 2 more files with values. `onboard` takes one .env file for each app by itself; to import another, run its line with the environment its values are for as ENV:
+  kagebunshin onboard --file $T/work/site/.dev.env --env ENV
+  kagebunshin onboard --file $T/work/site/production.env --env ENV
+
+Then, in each checkout above that is not done, paste this line into your coding agent:
+  Set up kagebunshin here: run `kagebunshin next` and do what it says until it says done.
+
+-- each goes in by its line, with its environment
+
+(human) $ kagebunshin onboard --file $T/work/site/.dev.env --env dev
+onboarding $T/work/site: import .dev.env into project site
+Passphrase for the local store (to import 1 env file): 
+importing $T/work/site/.dev.env into [site.dev]
+writing 2 keys from 1 file to the local store
+reading the state of site
+
+site ($T/work/site): used the existing project site, whose environment dev reads the local store, and put 2 keys from .dev.env in the local store's [site.dev]: API_TOKEN, SITE_URL
+  environment dev: 2 of 2 keys set
+  ready: your agent proves it with a run
+
+not imported: 1 more file with values. `onboard` takes one .env file for each app by itself; to import another, run its line with the environment its values are for as ENV:
+  kagebunshin onboard --file $T/work/site/production.env --env ENV
+
+Then, in each checkout above that is not done, paste this line into your coding agent:
+  Set up kagebunshin here: run `kagebunshin next` and do what it says until it says done.
+
+Delete $T/work/site/.dev.env now that its values are in the store? [y/N] kept $T/work/site/.dev.env; delete it once `kagebunshin run -- COMMAND` works
+
+(human) $ kagebunshin onboard --file production.env --env production
+onboarding $T/work/site: import production.env into project site, as its new environment production
+Passphrase for the local store (to import 1 env file): 
+importing $T/work/site/production.env into [site.production]
+writing 2 keys from 1 file to the local store
+warning: environment production of project site looks like production (its name has the segment production) and waits for a human decision; mark it sensitive with `kagebunshin mark env site production`, since it is production by its name, or ask the human: open the app (`kagebunshin app`) and either mark site/production sensitive or acknowledge it is not production
+reading the state of site
+
+site ($T/work/site): gave project site the environment production, and put 2 keys from production.env in the local store's [site.production]: API_TOKEN, SITE_URL
+  environment production: 2 of 2 keys set
+  needs your agent: mark site.production sensitive: it is production by its name, so its values are handed out only once the human approves the request in the app
+
+Then, in each checkout above that is not done, paste this line into your coding agent:
+  Set up kagebunshin here: run `kagebunshin next` and do what it says until it says done.
+
+Delete $T/work/site/production.env now that its values are in the store? [y/N] kept $T/work/site/production.env; delete it once `kagebunshin run -- COMMAND` works
+
+$ cat $HOME/.config/kagebunshin/projects/site.toml
+# Drafted by `kagebunshin project draft`. Check it with
+# `kagebunshin project apply FILE --check`.
+schema = 1
+remotes = ["github.com/acme/site"]
+# left out: AWS profile acme-prod: not checked: it looks like production (has the part prod)
+
+[envs.dev]
+# open: no secret found for API_TOKEN, SITE_URL
+#   kagebunshin store set site.dev API_TOKEN SITE_URL   (human)
+
+[[envs.production.sources]]
+provider = "file"
+
+$ kagebunshin run --strict -- ./test.sh
+ok   API_TOKEN
+ok   SITE_URL
+
+$ kagebunshin next
+project site, environment dev: 2 of 2 keys set, proven; an environment named production is left to mark
+next (you): mark site.production sensitive: it is production by its name, so its values are handed out only once the human approves the request in the app
+  kagebunshin mark env site production
+
+-- a second file for the same environment goes in over the first, and says what it replaced
+
+(human) $ kagebunshin --json onboard --file local.env --env dev --keep-env
+onboarding $T/work/site: import local.env into project site
+Passphrase for the local store (to import 1 env file): 
+importing $T/work/site/local.env into [site.dev]
+writing 1 key from 1 file to the local store
+reading the state of site
+{"deleted":[],"not_imported":[],"paste":"Set up kagebunshin here: run `kagebunshin next` and do what it says until it says done.","projects":[{"did":"used the existing project site, whose environment dev reads the local store, and put 1 key from local.env in the local store's [site.dev]: API_TOKEN; 1 of them replaced a value already there: API_TOKEN","dir":"$T/work/site","done":false,"env":"dev","imported":{"files":["$T/work/site/local.env"],"keys":["API_TOKEN"]},"of":2,"project":"site","set":2,"state":["needs your agent"],"step":{"command":"kagebunshin mark env site production","tell":null,"what":"mark site.production sensitive: it is production by its name, so its values are handed out only once the human approves the request in the app","who":"agent"},"tell":[]}],"skipped":[]}
+
+-- in a repository of several apps, a file outside every app's folder needs its project named
+
+$ kagebunshin next
+this repository has 2 apps, each its own project: all done
+  apps/web: project mono-web, environment dev: done. 2 of 2 keys set; `./test.sh` ran with them on <day>. They come from file:mono-web.dev (2).
+  apps/worker: project mono-worker, environment dev: done. 2 of 2 keys set; `./test.sh` ran with them on <day>. They come from aws_sm:acme/dev/api (1), aws_sm:acme/dev/queue (1).
+left for the human, when they like; tell them:
+  - $T/work/mono/apps/web/.env still holds values in plain text, and mono-web now gets its secrets from kagebunshin: delete the file once nothing in it is still needed (`rm $T/work/mono/apps/web/.env`).
+  - 1 more file here holds values in plain text that were not imported into kagebunshin: staging.env. To import one, say which environment its values are for and which project: I run its line with that as ENV and PROJECT, and you approve it in the kagebunshin app with the store passphrase. Or run it in a terminal yourself: `kagebunshin onboard --file $T/work/mono/staging.env --env ENV --name PROJECT`. Delete one that is not needed.
+
+(human) $ kagebunshin onboard --file staging.env --env staging
+kagebunshin: $T/work/mono/staging.env is in the folder of none of the 2 apps of $T/work/mono, so nothing says which project it is for; nothing was written
+hint: say which with `--name NAME` after the same command: one of mono-web (apps/web), mono-worker (apps/worker)
+[exit 2]
+
+(human) $ kagebunshin onboard --file staging.env --env staging --name mono-web
+onboarding $T/work/mono/apps/web: import $T/work/mono/staging.env into project mono-web, as its new environment staging
+Passphrase for the local store (to import 1 env file): 
+importing $T/work/mono/staging.env into [mono-web.staging]
+writing 2 keys from 1 file to the local store
+reading the state of mono-web
+
+mono-web ($T/work/mono/apps/web): gave project mono-web the environment staging, and put 2 keys from $T/work/mono/staging.env in the local store's [mono-web.staging]: SESSION_SECRET, PUBLIC_URL
+  environment staging: 2 of 2 keys set
+  ready: your agent proves it with a run
+
+Then, in each checkout above that is not done, paste this line into your coding agent:
+  Set up kagebunshin here: run `kagebunshin next` and do what it says until it says done.
+
+Delete $T/work/mono/staging.env now that its values are in the store? [y/N] deleted $T/work/mono/staging.env
+
+$ (cd apps/web && kagebunshin --env staging run --strict -- ./test.sh)
+ok   SESSION_SECRET
+ok   PUBLIC_URL
+
+$ kagebunshin next
+this repository has 2 apps, each its own project: all done
+  apps/web: project mono-web, environment dev: done. 2 of 2 keys set; `./test.sh` ran with them on <day>. They come from file:mono-web.dev (2).
+  apps/worker: project mono-worker, environment dev: done. 2 of 2 keys set; `./test.sh` ran with them on <day>. They come from aws_sm:acme/dev/api (1), aws_sm:acme/dev/queue (1).
+left for the human, when they like; tell them:
+  - $T/work/mono/apps/web/.env still holds values in plain text, and mono-web now gets its secrets from kagebunshin: delete the file once nothing in it is still needed (`rm $T/work/mono/apps/web/.env`).
+
+-- with one app, a file outside its folder is that app's: no name to give
+
+(human) $ kagebunshin onboard
+onboarding $T/work/solo/apps/web: import .env into new project solo-web
+Passphrase for the local store (to import 1 .env file): 
+importing $T/work/solo/apps/web/.env into [solo-web.dev]
+writing 1 key from 1 file to the local store
+reading the state of solo-web
+
+solo-web ($T/work/solo/apps/web): created project solo-web with environment dev, and put 1 key from .env in the local store's [solo-web.dev]: API_TOKEN
+  environment dev: 1 of 1 keys set
+  ready: your agent proves it with a run
+
+not imported: 1 more file with values. `onboard` takes one .env file for each app by itself; to import another, run its line with the environment its values are for as ENV:
+  kagebunshin onboard --file $T/work/solo/production.env --env ENV
+
+Then, in each checkout above that is not done, paste this line into your coding agent:
+  Set up kagebunshin here: run `kagebunshin next` and do what it says until it says done.
+
+Delete $T/work/solo/apps/web/.env now that its values are in the store? [y/N] kept $T/work/solo/apps/web/.env; delete it once `kagebunshin run -- COMMAND` works
+
+(human) $ kagebunshin onboard --file production.env --env production
+onboarding $T/work/solo/apps/web: import $T/work/solo/production.env into project solo-web, as its new environment production
+Passphrase for the local store (to import 1 env file): 
+importing $T/work/solo/production.env into [solo-web.production]
+writing 1 key from 1 file to the local store
+warning: environment production of project solo-web looks like production (its name has the segment production) and waits for a human decision; mark it sensitive with `kagebunshin mark env solo-web production`, since it is production by its name, or ask the human: open the app (`kagebunshin app`) and either mark solo-web/production sensitive or acknowledge it is not production
+reading the state of solo-web
+
+solo-web ($T/work/solo/apps/web): gave project solo-web the environment production, and put 1 key from $T/work/solo/production.env in the local store's [solo-web.production]: API_TOKEN
+  environment production: 1 of 1 keys set
+  needs your agent: mark solo-web.production sensitive: it is production by its name, so its values are handed out only once the human approves the request in the app
+
+Then, in each checkout above that is not done, paste this line into your coding agent:
+  Set up kagebunshin here: run `kagebunshin next` and do what it says until it says done.
+
+Delete $T/work/solo/production.env now that its values are in the store? [y/N] kept $T/work/solo/production.env; delete it once `kagebunshin run -- COMMAND` works

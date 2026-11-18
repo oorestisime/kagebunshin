@@ -1,0 +1,47 @@
+---
+source: crates/e2e/tests/aws.rs
+expression: w.transcript()
+---
+######## 
+
+$ kagebunshin project init app
+created project app with environment dev
+
+-- under a prefix
+
+$ kagebunshin project add-source app dev --provider aws_sm --prefix bin/ --profile acme-dev
+added a source to environment dev of project app; it replaces the default source, the local store's section, unless you add `--provider file` too
+
+$ kagebunshin status
+daemon: unlocked
+providers:
+  aws_sm  profile acme-dev  ok
+project: app
+env: dev
+.env.example: none found
+1 key
+  TEXT  aws_sm:bin/text
+warning: aws_sm prefix bin/ (profile acme-dev): skipped secret bin/blob, which is binary
+
+$ kagebunshin run -- sh -c 'echo text is ${TEXT:+set}'
+kagebunshin: warning: aws_sm prefix bin/ (profile acme-dev): skipped secret bin/blob, which is binary
+kagebunshin: warning: no .env.example found, so every key the environment has is passed (1 key); `kagebunshin project example` writes one from the keys the code reads, to pass only those
+text is set
+
+$ kagebunshin list --keys --prefix bin/ --profile acme-dev
+2 matches
+  bin/blob  aws_sm  (keys not read: secret bin/blob is binary; only string secrets are supported)
+  bin/text  aws_sm  TEXT
+
+-- named on its own
+
+$ kagebunshin project add-env app only
+added environment only to project app
+
+$ kagebunshin project add-source app only --provider aws_sm --secret bin/blob --key BLOB --profile acme-dev
+added a source to environment only of project app; it replaces the default source, the local store's section, unless you add `--provider file` too
+
+$ kagebunshin --env only run -- true
+kagebunshin: cannot resolve environment only of project app: aws_sm secret bin/blob (profile acme-dev): secret bin/blob is binary; only string secrets are supported
+hint: kagebunshin reads no binary secret: take it out with `kagebunshin project remove-source app only 1`
+[exit 1]

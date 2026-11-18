@@ -1,0 +1,20 @@
+---
+source: crates/kagebunshin/src/cli/mod.rs
+expression: text
+---
+Remove one of an environment's sources
+
+Usage: kagebunshin project remove-source [OPTIONS] <PROJECT> <ENV> <SOURCE>
+
+Arguments:
+  <PROJECT>  The project
+  <ENV>      The environment
+  <SOURCE>   Which source, from 1
+
+Options:
+      --json            Print machine-readable JSON; errors go to stderr as JSON
+      --socket <PATH>   Daemon socket [default: $KAGEBUNSHIN_SOCKET, else a per-user runtime dir]
+      --env <ENV>       Environment to use instead of the project's default
+      --project <NAME>  Project to use instead of the one for this folder; it must claim this checkout's remotes
+  -h, --help            Print help (see more with '--help')
+  -V, --version         Print version

@@ -1,0 +1,13 @@
+---
+source: crates/kagebunshin/src/cli/desktop.rs
+expression: "entry(cli, socket, true).unwrap()"
+---
+[Desktop Entry]
+Type=Application
+Name=Kagebunshin
+Comment=Your projects' secrets: keys, approvals and the audit log
+Icon=io.github.oorestisime.kagebunshin
+Terminal=false
+Exec="/home/someone/.local/bin/kagebunshin" --socket "/run/user/1000/kagebunshin/kagebunshind.sock" app --hidden
+X-GNOME-Autostart-enabled=true
+X-Kagebunshin-Managed=true

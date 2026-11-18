@@ -1,0 +1,94 @@
+---
+source: crates/e2e/tests/walk.rs
+expression: text
+---
+######## 77. Leaving an app out, and clearing what a removed project left
+
+-- a name that is no app's is said before anything is written
+
+$ kagebunshin onboard depot --exclude apps/old
+kagebunshin: --exclude apps/old names no app, by its folder or its project's name; nothing was written; the apps there are $T/work/depot/apps/back (depot-back), $T/work/depot/apps/front (depot-front), $T/work/depot/apps/legacy (depot-legacy)
+[exit 2]
+
+-- the apps are listed before the passphrase; the one left out gets no project and no section
+
+(human) $ kagebunshin onboard depot --exclude apps/legacy
+onboarding 2 apps in 1 checkout: 2 env files to import
+  apps/back: import .env into new project depot-back
+  apps/front: import .env into new project depot-front
+  apps/legacy: left out
+Passphrase for the local store (to import 2 .env files): 
+importing $T/work/depot/apps/back/.env into [depot-back.dev]
+importing $T/work/depot/apps/front/.env into [depot-front.dev]
+writing 2 keys from 2 files to the local store
+reading the state of depot-back (1 of 2)
+reading the state of depot-front (2 of 2)
+
+depot-back ($T/work/depot/apps/back): created project depot-back with environment dev, and put 1 key from .env in the local store's [depot-back.dev]: API_TOKEN
+  environment dev: 1 of 1 keys set
+  ready: your agent proves it with a run
+
+depot-front ($T/work/depot/apps/front): created project depot-front with environment dev, and put 1 key from .env in the local store's [depot-front.dev]: API_TOKEN
+  environment dev: 1 of 1 keys set
+  ready: your agent proves it with a run
+
+skipped $T/work/depot/apps/legacy: left out with --exclude
+
+Then, in each checkout above that is not done, paste this line into your coding agent:
+  Set up kagebunshin here: run `kagebunshin next` and do what it says until it says done.
+
+Delete $T/work/depot/apps/back/.env, $T/work/depot/apps/front/.env now that their values are in the store? [y/N] kept $T/work/depot/apps/back/.env, $T/work/depot/apps/front/.env; delete them once `kagebunshin run -- COMMAND` works
+
+$ kagebunshin store list | grep depot
+[depot-back.dev]
+[depot-front.dev]
+
+-- it stays out: `next` does not wait for it, and the checkout drafted again passes over it
+
+$ kagebunshin next
+this repository has 3 apps, each its own project
+  apps/back: project depot-back, environment dev: 1 of 1 keys set, not yet proven
+  apps/front: project depot-front, environment dev: 1 of 1 keys set, not yet proven
+  apps/legacy: left out; `kagebunshin onboard` of its folder sets it up
+next (you): in apps/back: prove the setup: run the project's tests or its start command with its keys; pick the command
+  cd apps/back && kagebunshin run --strict -- COMMAND
+
+$ kagebunshin project draft --apply
+draft of project depot-back for apps/back:
+  $T/work/depot/apps/back/.env has values and nothing else says where its secrets live, so nothing was drafted; `onboard` moves them into kagebunshin, with a person's approval
+      kagebunshin onboard $T/work/depot   (human)
+draft of project depot-front for apps/front:
+  $T/work/depot/apps/front/.env has values and nothing else says where its secrets live, so nothing was drafted; `onboard` moves them into kagebunshin, with a person's approval
+      kagebunshin onboard $T/work/depot   (human)
+note: left out, as `kagebunshin onboard --exclude` said: apps/legacy; `kagebunshin onboard DIR` sets one up
+
+$ ls $HOME/.config/kagebunshin/projects | grep depot
+depot-back.toml
+depot-front.toml
+
+-- a project removed leaves its values in the store, and says how to clear them
+
+$ kagebunshin project remove depot-back
+removed project depot-back ($T/home/.config/kagebunshin/projects/depot-back.toml)
+its values are still in the local store: [depot-back.dev] (1 key)
+to remove them, run `kagebunshin store clear depot-back` in a terminal; it asks for the passphrase
+
+-- clearing is refused while the project is there, and takes the passphrase: a person's
+
+$ kagebunshin store clear depot-front
+kagebunshin: project depot-front is still there, and its environments read these values; nothing was removed
+hint: `kagebunshin project remove depot-front` removes the project; `kagebunshin store unset SECTION KEY` removes one key
+[exit 5]
+
+$ kagebunshin --json store clear depot-back
+this removes [depot-back.dev] (1 key) from the local store
+{"code":"no_terminal","message":"cannot read a passphrase from the terminal: No such device or address (os error 6)","hint":"run this in an interactive terminal","who":"human","tell":"Please run `kagebunshin store clear depot-back` in a terminal; it asks for the store passphrase and removes the values project depot-back left in the local store."}
+[exit 1]
+
+(human) $ kagebunshin store clear depot-back
+this removes [depot-back.dev] (1 key) from the local store
+Passphrase for the local store: 
+removed [depot-back.dev] (1 key)
+
+$ kagebunshin store list | grep depot
+[depot-front.dev]

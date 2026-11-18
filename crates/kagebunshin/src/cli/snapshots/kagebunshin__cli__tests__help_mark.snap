@@ -1,0 +1,21 @@
+---
+source: crates/kagebunshin/src/cli/mod.rs
+expression: sub.clone().render_help().to_string()
+---
+Mark an environment, a secret or a store key sensitive
+
+Usage: kagebunshin mark [OPTIONS] <COMMAND>
+
+Commands:
+  env     Mark an environment, and the secrets only its sources read
+  secret  Mark one secret, wherever it is read
+  key     Mark one key of the local store
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+      --json            Print machine-readable JSON; errors go to stderr as JSON
+      --socket <PATH>   Daemon socket [default: $KAGEBUNSHIN_SOCKET, else a per-user runtime dir]
+      --env <ENV>       Environment to use instead of the project's default
+      --project <NAME>  Project to use instead of the one for this folder; it must claim this checkout's remotes
+  -h, --help            Print help (see more with '--help')
+  -V, --version         Print version

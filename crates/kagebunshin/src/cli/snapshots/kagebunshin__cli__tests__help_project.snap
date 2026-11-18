@@ -1,0 +1,35 @@
+---
+source: crates/kagebunshin/src/cli/mod.rs
+expression: sub.clone().render_help().to_string()
+---
+Create projects and add environments and sources, without editing TOML
+
+Usage: kagebunshin project [OPTIONS] <COMMAND>
+
+Commands:
+  init           Create a project, identified by its git remotes, with one environment
+  remove         Remove a project: delete its file
+  add-env        Add an environment to a project
+  add-source     Add a source to an environment; a later source wins over an earlier one
+  remove-source  Remove one of an environment's sources
+  move-source    Move one of an environment's sources, changing which wins a key two set
+  dedupe         Remove an environment's exact duplicate sources, keeping the copy that wins
+  set-source     Change the AWS profile or region of an environment's aws_sm sources
+  set-var        Set a plain setting of an environment, one that is not secret (PORT=3000)
+  unset-var      Remove a plain setting of an environment
+  set            Change a project's AWS profile, or with --env an environment's
+  list           List the projects, each with its folder, environments and providers
+  show           Print a project's configuration: names and settings, never values
+  facts          Print what this checkout and the connected providers say, names only
+  example        Write the app's .env.example from the keys its code reads, names only
+  apply          Check a project file in a dry run, then install it, all or nothing
+  draft          Draft a project file for this checkout from what it and the providers say
+  help           Print this message or the help of the given subcommand(s)
+
+Options:
+      --json            Print machine-readable JSON; errors go to stderr as JSON
+      --socket <PATH>   Daemon socket [default: $KAGEBUNSHIN_SOCKET, else a per-user runtime dir]
+      --env <ENV>       Environment to use instead of the project's default
+      --project <NAME>  Project to use instead of the one for this folder; it must claim this checkout's remotes
+  -h, --help            Print help
+  -V, --version         Print version

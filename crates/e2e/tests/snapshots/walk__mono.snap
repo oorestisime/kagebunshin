@@ -1,0 +1,41 @@
+---
+source: crates/e2e/tests/walk.rs
+expression: text
+---
+######## M. A repository of several apps (mono)
+
+$ kagebunshin next
+this repository has 2 apps, each its own project
+  apps/web: project mono-web, environment dev: 2 of 2 keys set, not yet proven
+  apps/worker: project mono-worker, environment dev: 2 of 2 keys set, not yet proven
+next (you): in apps/web: prove the setup: run the project's tests or its start command with its keys; pick the command
+  cd apps/web && kagebunshin run --strict -- COMMAND
+
+$ kagebunshin status
+kagebunshin: the repository root is in no project: this repository has one project per folder, mono-web (apps/web), mono-worker (apps/worker); run from one of those folders, or pass --project NAME
+hint: `kagebunshin next` says where each of those projects stands
+[exit 1]
+
+$ (cd apps/web && kagebunshin run --strict -- ./test.sh)
+ok   SESSION_SECRET
+ok   PUBLIC_URL
+
+$ kagebunshin next
+this repository has 2 apps, each its own project
+  apps/web: project mono-web, environment dev: done. 2 of 2 keys set; `./test.sh` ran with them on <day>. They come from file:mono-web.dev (2).
+  apps/worker: project mono-worker, environment dev: 2 of 2 keys set, not yet proven
+next (you): in apps/worker: prove the setup: run the project's tests or its start command with its keys; pick the command
+  cd apps/worker && kagebunshin run --strict -- COMMAND
+waiting on the human; tell them:
+  - $T/work/mono/apps/web/.env still holds values in plain text, and mono-web now gets its secrets from kagebunshin: delete the file once nothing in it is still needed (`rm $T/work/mono/apps/web/.env`).
+
+$ (cd apps/worker && kagebunshin run --strict -- ./test.sh)
+ok   QUEUE_URL
+ok   API_KEY
+
+$ kagebunshin next
+this repository has 2 apps, each its own project: all done
+  apps/web: project mono-web, environment dev: done. 2 of 2 keys set; `./test.sh` ran with them on <day>. They come from file:mono-web.dev (2).
+  apps/worker: project mono-worker, environment dev: done. 2 of 2 keys set; `./test.sh` ran with them on <day>. They come from aws_sm:acme/dev/api (1), aws_sm:acme/dev/queue (1).
+left for the human, when they like; tell them:
+  - $T/work/mono/apps/web/.env still holds values in plain text, and mono-web now gets its secrets from kagebunshin: delete the file once nothing in it is still needed (`rm $T/work/mono/apps/web/.env`).

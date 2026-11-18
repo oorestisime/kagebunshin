@@ -1,0 +1,19 @@
+---
+source: crates/kagebunshin/src/cli/mod.rs
+expression: text
+---
+Change a project's AWS profile, or with --env an environment's
+
+Usage: kagebunshin project set [OPTIONS] --profile <PROFILE> <PROJECT>
+
+Arguments:
+  <PROJECT>  The project
+
+Options:
+      --json               Print machine-readable JSON; errors go to stderr as JSON
+      --profile <PROFILE>  The AWS profile
+      --socket <PATH>      Daemon socket [default: $KAGEBUNSHIN_SOCKET, else a per-user runtime dir]
+      --env <ENV>          Environment to use instead of the project's default
+      --project <NAME>     Project to use instead of the one for this folder; it must claim this checkout's remotes
+  -h, --help               Print help (see more with '--help')
+  -V, --version            Print version

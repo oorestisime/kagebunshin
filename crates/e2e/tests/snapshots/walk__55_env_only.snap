@@ -1,0 +1,99 @@
+---
+source: crates/e2e/tests/walk.rs
+expression: text
+---
+######## 55. A .env-only repository (blog)
+
+$ kagebunshin status
+kagebunshin: unknown project: no project claims github.com/acme/blog
+hint: .env here has values: `kagebunshin onboard $T/work/blog` moves them into kagebunshin, once a person approves that with the store passphrase, in the kagebunshin app or at a terminal. `kagebunshin next` says whose step it is; do not run `kagebunshin project init`
+ask the human: move the values in .env into kagebunshin: approve the import in the kagebunshin app when it asks, or run `kagebunshin onboard $T/work/blog` in a terminal
+[exit 1]
+
+$ kagebunshin --json status
+{"code":"no_project","message":"unknown project: no project claims github.com/acme/blog","hint":".env here has values: `kagebunshin onboard $T/work/blog` moves them into kagebunshin, once a person approves that with the store passphrase, in the kagebunshin app or at a terminal. `kagebunshin next` says whose step it is; do not run `kagebunshin project init`","who":"human","tell":"move the values in .env into kagebunshin: approve the import in the kagebunshin app when it asks, or run `kagebunshin onboard $T/work/blog` in a terminal"}
+[exit 1]
+
+(hook) start
+kagebunshin: kagebunshin is installed on this machine and can hold this checkout's secrets instead of a .env file. .env here has values: do not read it. They are moved into kagebunshin with the human's approval; to set the project up, starting with that, run `kagebunshin next` and do what it says.
+
+$ kagebunshin next
+this checkout is in no kagebunshin project
+waiting on the human; tell them:
+  - Please open the kagebunshin app (`kagebunshin app`) and say when it is open: I then move the values of .env into kagebunshin, and you approve it in the app's window with the store passphrase. Or run `kagebunshin onboard $T/work/blog` in a terminal yourself; it asks for the passphrase there.
+nothing more you can do until the human has done the above
+
+$ kagebunshin --json next
+{"project":null,"env":null,"done":false,"keys":null,"headline":"this checkout is in no kagebunshin project","step":null,"human":[{"what":"move the values of .env into kagebunshin","command":"kagebunshin onboard $T/work/blog","tell":"Please open the kagebunshin app (`kagebunshin app`) and say when it is open: I then move the values of .env into kagebunshin, and you approve it in the app's window with the store passphrase. Or run `kagebunshin onboard $T/work/blog` in a terminal yourself; it asks for the passphrase there."}]}
+
+-- the old trap: the agent runs project init anyway
+
+$ kagebunshin project init blog
+created project blog with environment dev; .env here has values: `kagebunshin onboard $T/work/blog` moves them into this project's environment dev, once a person approves that with the store passphrase
+
+$ kagebunshin next
+project blog, environment dev: 0 of 4 keys set
+next (you): set PORT as a plain setting to .env.example's value, only if that is the real setting and not a placeholder (a secret belongs in the store or a provider)
+  kagebunshin project set-var blog dev PORT 3000
+waiting on the human; tell them:
+  - Please open the kagebunshin app (`kagebunshin app`) and say when it is open: I then move the values of .env into kagebunshin, and you approve it in the app's window with the store passphrase. Or run `kagebunshin onboard $T/work/blog` in a terminal yourself; it asks for the passphrase there.
+
+(human) $ kagebunshin onboard $T/work/blog
+onboarding $T/work/blog: import .env into project blog
+Passphrase for the local store (to import 1 .env file): 
+importing $T/work/blog/.env into [blog.dev]
+writing 4 keys from 1 file to the local store
+reading the state of blog
+
+blog ($T/work/blog): used the existing project blog, whose environment dev reads the local store, and put 4 keys from .env in the local store's [blog.dev]: DATABASE_URL, SESSION_SECRET, PORT, LOG_LEVEL
+  environment dev: 4 of 4 keys set
+  ready: your agent proves it with a run
+
+Then, in each checkout above that is not done, paste this line into your coding agent:
+  Set up kagebunshin here: run `kagebunshin next` and do what it says until it says done.
+
+Delete $T/work/blog/.env now that its values are in the store? [y/N] kept $T/work/blog/.env; delete it once `kagebunshin run -- COMMAND` works
+
+$ kagebunshin next
+project blog, environment dev: 4 of 4 keys set, not yet proven
+next (you): prove the setup: run the project's tests or its start command with its keys; pick the command
+  kagebunshin run --strict -- COMMAND
+
+$ kagebunshin run --strict -- ./test.sh
+ok   DATABASE_URL
+ok   SESSION_SECRET
+ok   PORT
+ok   LOG_LEVEL
+
+$ kagebunshin next
+project blog, environment dev: done. 4 of 4 keys set; `./test.sh` ran with them on <day>. They come from file:blog.dev (4).
+left for the human, when they like; tell them:
+  - $T/work/blog/.env still holds values in plain text, and blog now gets its secrets from kagebunshin: delete the file once nothing in it is still needed (`rm $T/work/blog/.env`).
+
+$ kagebunshin status
+daemon: unlocked
+providers:
+  file  local store  ok
+project: blog
+env: dev
+4 keys
+  DATABASE_URL    file:blog.dev
+  LOG_LEVEL       file:blog.dev
+  PORT            file:blog.dev
+  SESSION_SECRET  file:blog.dev
+left for the human:
+  delete .env, which still holds values in plain text: rm $T/work/blog/.env
+every key set; `./test.sh` ran with them on <day>
+
+-- project remove
+
+$ kagebunshin project init scratch
+created project scratch with environment dev
+
+$ kagebunshin project remove scratch
+removed project scratch ($T/home/.config/kagebunshin/projects/scratch.toml)
+
+$ kagebunshin status
+kagebunshin: unknown project: no project claims github.com/acme/scratch
+hint: run `kagebunshin next`, which says how to set this checkout up step by step; or create an empty project by hand with `kagebunshin project init scratch`
+[exit 1]

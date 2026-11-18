@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  check:
+    name: fmt, clippy, test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      # Installs the toolchain pinned in rust-toolchain.toml.
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo test --locked
+
+  # The app is outside the default members, so the job above never builds it.
+  app:
+    name: app (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: app
+      # Build headers, and lavapipe for headless rendering without a GPU.
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libxkbcommon-dev libwayland-dev mesa-vulkan-drivers
+      - run: cargo clippy -p kagebunshin-app --all-targets --locked -- -D warnings
+      - run: cargo test -p kagebunshin-app --locked
+      - if: runner.os == 'Linux'
+        run: cargo build -p kagebunshin-app --locked
+      - name: Render every scene, light and dark
+        if: runner.os == 'Linux'
+        env:
+          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.json
+        run: |
+          mkdir -p snaps
+          export HOME="$RUNNER_TEMP/home" XDG_CONFIG_HOME="$RUNNER_TEMP/config"
+          for scene in unlocked locked down error empty confirm passphrase adding; do
+            for theme in light dark; do
+              target/debug/kagebunshin-app --snap "snaps/$scene-$theme.png" --scene "$scene" --theme "$theme"
+            done
+          done
+      - if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-snaps
+          path: snaps/
+
+  deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check

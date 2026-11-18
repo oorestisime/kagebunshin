@@ -1,0 +1,20 @@
+---
+source: crates/kagebunshin/src/cli/mod.rs
+expression: text
+---
+Check a project file in a dry run, then install it, all or nothing
+
+Usage: kagebunshin project apply [OPTIONS] <FILE>
+
+Arguments:
+  <FILE>  The project file
+
+Options:
+      --json            Print machine-readable JSON; errors go to stderr as JSON
+      --name <NAME>     The project's name [default: the file's name]
+      --check           Only check: install nothing
+      --socket <PATH>   Daemon socket [default: $KAGEBUNSHIN_SOCKET, else a per-user runtime dir]
+      --env <ENV>       Environment to use instead of the project's default
+      --project <NAME>  Project to use instead of the one for this folder; it must claim this checkout's remotes
+  -h, --help            Print help (see more with '--help')
+  -V, --version         Print version

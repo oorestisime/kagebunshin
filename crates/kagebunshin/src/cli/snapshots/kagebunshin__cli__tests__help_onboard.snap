@@ -1,0 +1,23 @@
+---
+source: crates/kagebunshin/src/cli/mod.rs
+expression: sub.clone().render_help().to_string()
+---
+Start using kagebunshin in these checkouts, with one passphrase
+
+Usage: kagebunshin onboard [OPTIONS] [DIR]...
+
+Arguments:
+  [DIR]...  Checkout folders, or app folders in one
+
+Options:
+      --file <PATH>     Import this env file instead, whatever its name; may repeat
+      --json            Print machine-readable JSON; errors go to stderr as JSON
+      --name <NAME>     The project's name, with one folder or --file [default: from the folder's name]
+      --socket <PATH>   Daemon socket [default: $KAGEBUNSHIN_SOCKET, else a per-user runtime dir]
+      --env <ENV>       Environment to use instead of the project's default
+      --exclude <APP>   Leave this app out, by its folder or its project's name; may repeat
+      --delete-env      Delete the imported env files without asking
+      --project <NAME>  Project to use instead of the one for this folder; it must claim this checkout's remotes
+      --keep-env        Keep the imported env files without asking (also with --json)
+  -h, --help            Print help (see more with '--help')
+  -V, --version         Print version

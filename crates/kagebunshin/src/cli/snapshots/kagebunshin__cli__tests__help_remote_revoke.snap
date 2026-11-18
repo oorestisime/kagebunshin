@@ -1,0 +1,19 @@
+---
+source: crates/kagebunshin/src/cli/mod.rs
+expression: text
+---
+Take a machine's grants away: the one for a project, or every one
+
+Usage: kagebunshin remote revoke [OPTIONS] <MACHINE> [PROJECT]
+
+Arguments:
+  <MACHINE>  The machine, as its grant names it, or its node id
+  [PROJECT]  Only the grant for this project
+
+Options:
+      --json            Print machine-readable JSON; errors go to stderr as JSON
+      --socket <PATH>   Daemon socket [default: $KAGEBUNSHIN_SOCKET, else a per-user runtime dir]
+      --env <ENV>       Environment to use instead of the project's default
+      --project <NAME>  Project to use instead of the one for this folder; it must claim this checkout's remotes
+  -h, --help            Print help
+  -V, --version         Print version

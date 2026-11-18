@@ -1,0 +1,17 @@
+---
+source: crates/kagebunshin/src/cli/mod.rs
+expression: text
+---
+Pick an AWS profile, log in if needed, check it can list secrets, and make it the default
+
+Usage: kagebunshin connect aws [OPTIONS]
+
+Options:
+      --json               Print machine-readable JSON; errors go to stderr as JSON
+      --profile <PROFILE>  The profile, instead of asking
+      --region <REGION>    The region, instead of the profile's own
+      --socket <PATH>      Daemon socket [default: $KAGEBUNSHIN_SOCKET, else a per-user runtime dir]
+      --env <ENV>          Environment to use instead of the project's default
+      --project <NAME>     Project to use instead of the one for this folder; it must claim this checkout's remotes
+  -h, --help               Print help (see more with '--help')
+  -V, --version            Print version

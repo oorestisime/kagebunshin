@@ -1,0 +1,182 @@
+---
+source: crates/e2e/tests/walk.rs
+expression: text
+---
+######## 71. The agent imports env files, and the human approves it in the app
+
+-- the app is closed: the human is asked to open it, and an onboard run anyway imports nothing
+
+$ kagebunshin next inbox ledger
+2 checkouts
+  $T/work/inbox: this checkout is in no kagebunshin project
+  $T/work/ledger: this checkout is in no kagebunshin project
+waiting on the human; tell them:
+  - Please open the kagebunshin app (`kagebunshin app`) and say when it is open: I then move the values of the env files of $T/work/inbox, $T/work/ledger into kagebunshin, and you approve it in the app's window with the store passphrase. Or run `kagebunshin onboard $T/work/inbox $T/work/ledger` in a terminal yourself; it asks for the passphrase there.
+nothing more you can do until the human has done the above
+
+$ kagebunshin onboard inbox ledger
+onboarding 2 apps in 2 checkouts: 2 env files to import
+  $T/work/inbox: import .env into new project inbox
+  $T/work/ledger: import .env into new project ledger
+kagebunshin: importing 2 env files takes the local store's passphrase, which a person types: in the app when this runs with no terminal, and the app is not open; nothing was imported
+hint: once the app is open, run this again: the app's window lists what is imported and takes the passphrase. In a terminal this asks for the passphrase itself
+ask the human: open the app (`kagebunshin app`), so the import into the local store can be approved there
+[exit 5]
+
+$ kagebunshin --json onboard inbox ledger
+onboarding 2 apps in 2 checkouts: 2 env files to import
+  $T/work/inbox: import .env into new project inbox
+  $T/work/ledger: import .env into new project ledger
+{"code":"no_app","message":"importing 2 env files takes the local store's passphrase, which a person types: in the app when this runs with no terminal, and the app is not open; nothing was imported","hint":"once the app is open, run this again: the app's window lists what is imported and takes the passphrase. In a terminal this asks for the passphrase itself","who":"human","tell":"open the app (`kagebunshin app`), so the import into the local store can be approved there"}
+[exit 5]
+
+-- the app is open: the import is the agent's step
+
+$ kagebunshin next inbox ledger
+2 checkouts
+  $T/work/inbox: this checkout is in no kagebunshin project
+  $T/work/ledger: this checkout is in no kagebunshin project
+next (you): move the values of the env files of $T/work/inbox, $T/work/ledger into kagebunshin. It waits for the human to approve the import in the kagebunshin app, which shows what is imported and takes the store passphrase: say so first, then run it
+  kagebunshin onboard $T/work/inbox $T/work/ledger
+
+-- the human does not answer (`approval_timeout` is 3 seconds here): nothing is imported
+
+$ kagebunshin onboard inbox ledger
+onboarding 2 apps in 2 checkouts: 2 env files to import
+  $T/work/inbox: import .env into new project inbox
+  $T/work/ledger: import .env into new project ledger
+importing $T/work/inbox/.env into [inbox.dev]
+importing $T/work/ledger/.env into [ledger.dev]
+waiting for a person to approve, in the kagebunshin app, importing 4 keys from 2 files into the local store: its window lists them and takes the store's passphrase
+
+inbox ($T/work/inbox): nothing was written
+  failed: nobody answered the app's prompt within 3 seconds, so nothing was imported
+  hint: run the command again once the human is at the screen: the app's window shows what is imported and takes the store's passphrase
+
+ledger ($T/work/ledger): nothing was written
+  failed: nobody answered the app's prompt within 3 seconds, so nothing was imported
+  hint: run the command again once the human is at the screen: the app's window shows what is imported and takes the store's passphrase
+kagebunshin: nobody answered the app's prompt within 3 seconds, so nothing was imported
+hint: run the command again once the human is at the screen: the app's window shows what is imported and takes the store's passphrase
+ask the human: approve the import in the app (`kagebunshin app`) when it asks
+[exit 5]
+
+-- the human clicks Deny: nothing is imported
+
+$ kagebunshin onboard inbox ledger
+onboarding 2 apps in 2 checkouts: 2 env files to import
+  $T/work/inbox: import .env into new project inbox
+  $T/work/ledger: import .env into new project ledger
+importing $T/work/inbox/.env into [inbox.dev]
+importing $T/work/ledger/.env into [ledger.dev]
+waiting for a person to approve, in the kagebunshin app, importing 4 keys from 2 files into the local store: its window lists them and takes the store's passphrase
+
+inbox ($T/work/inbox): nothing was written
+  failed: a person refused the import in the app, so nothing was imported
+  hint: a person refused this in the app: ask them before running it again
+
+ledger ($T/work/ledger): nothing was written
+  failed: a person refused the import in the app, so nothing was imported
+  hint: a person refused this in the app: ask them before running it again
+kagebunshin: a person refused the import in the app, so nothing was imported
+hint: a person refused this in the app: ask them before running it again
+[exit 5]
+
+$ ls $HOME/.config/kagebunshin/projects | grep -E 'inbox|ledger'
+[exit 1]
+
+-- the human types the passphrase once and clicks Approve: both checkouts are imported
+
+$ kagebunshin onboard inbox ledger
+onboarding 2 apps in 2 checkouts: 2 env files to import
+  $T/work/inbox: import .env into new project inbox
+  $T/work/ledger: import .env into new project ledger
+importing $T/work/inbox/.env into [inbox.dev]
+importing $T/work/ledger/.env into [ledger.dev]
+waiting for a person to approve, in the kagebunshin app, importing 4 keys from 2 files into the local store: its window lists them and takes the store's passphrase
+reading the state of inbox (1 of 2)
+reading the state of ledger (2 of 2)
+
+inbox ($T/work/inbox): created project inbox with environment dev, and put 2 keys from .env in the local store's [inbox.dev]: API_TOKEN, PORT
+  environment dev: 2 of 2 keys set
+  ready: your agent proves it with a run
+
+ledger ($T/work/ledger): created project ledger with environment dev, and put 2 keys from .env in the local store's [ledger.dev]: API_TOKEN, PORT
+  environment dev: 2 of 2 keys set
+  ready: your agent proves it with a run
+
+Then go on with `kagebunshin next` in each checkout above that is not done.
+kept $T/work/inbox/.env, $T/work/ledger/.env; delete them once `kagebunshin run -- COMMAND` works
+
+-- the agent goes on to done, with nothing more from the human
+
+$ kagebunshin next inbox ledger
+2 checkouts
+  $T/work/inbox: project inbox, environment dev: 2 of 2 keys set, not yet proven
+  $T/work/ledger: project ledger, environment dev: 2 of 2 keys set, not yet proven
+next (you): in $T/work/inbox: prove the setup: run the project's tests or its start command with its keys; pick the command
+  cd $T/work/inbox && kagebunshin run --strict -- COMMAND
+
+$ cd $T/work/inbox && kagebunshin run --strict -- ./test.sh
+ok   API_TOKEN
+ok   PORT
+
+$ kagebunshin next inbox ledger
+2 checkouts
+  $T/work/inbox: project inbox, environment dev: done. 2 of 2 keys set; `./test.sh` ran with them on <day>. They come from file:inbox.dev (2).
+  $T/work/ledger: project ledger, environment dev: 2 of 2 keys set, not yet proven
+next (you): in $T/work/ledger: prove the setup: run the project's tests or its start command with its keys; pick the command
+  cd $T/work/ledger && kagebunshin run --strict -- COMMAND
+waiting on the human; tell them:
+  - $T/work/inbox/.env still holds values in plain text, and inbox now gets its secrets from kagebunshin: delete the file once nothing in it is still needed (`rm $T/work/inbox/.env`).
+
+$ cd $T/work/ledger && kagebunshin run --strict -- ./test.sh
+ok   API_TOKEN
+ok   PORT
+
+$ kagebunshin next inbox ledger
+2 checkouts: all done
+  $T/work/inbox: project inbox, environment dev: done. 2 of 2 keys set; `./test.sh` ran with them on <day>. They come from file:inbox.dev (2).
+  $T/work/ledger: project ledger, environment dev: done. 2 of 2 keys set; `./test.sh` ran with them on <day>. They come from file:ledger.dev (2).
+left for the human, when they like; tell them:
+  - $T/work/inbox/.env still holds values in plain text, and inbox now gets its secrets from kagebunshin: delete the file once nothing in it is still needed (`rm $T/work/inbox/.env`).
+  - $T/work/ledger/.env still holds values in plain text, and ledger now gets its secrets from kagebunshin: delete the file once nothing in it is still needed (`rm $T/work/ledger/.env`).
+
+-- the daemon has locked meanwhile: `next` asks for the unlock first, and an onboard run anyway is not stuck, its approval unlocks too
+
+$ kagebunshin lock
+locked
+
+$ kagebunshin next pager
+the kagebunshin daemon is locked
+waiting on the human; tell them:
+  - Please unlock kagebunshin: type the store passphrase in the app's window, or run `kagebunshin unlock` in a terminal.
+nothing more you can do until the human has done the above
+
+$ kagebunshin onboard pager
+onboarding $T/work/pager: import .env into new project pager
+importing $T/work/pager/.env into [pager.dev]
+waiting for a person to approve, in the kagebunshin app, importing 1 key from 1 file into the local store: its window lists them and takes the store's passphrase
+reading the state of pager
+
+pager ($T/work/pager): created project pager with environment dev, and put 1 key from .env in the local store's [pager.dev]: API_TOKEN
+  environment dev: 1 of 1 keys set
+  ready: your agent proves it with a run
+
+Then go on with `kagebunshin next` in each checkout above that is not done.
+kept $T/work/pager/.env; delete it once `kagebunshin run -- COMMAND` works
+
+$ cd $T/work/pager && kagebunshin run --strict -- ./test.sh
+ok   API_TOKEN
+
+-- each request is in the audit log, by key name
+
+$ kagebunshin audit | grep -E 'store import|unlock' | tail -8
+<time> timeout store import pid <n> keys inbox.dev.API_TOKEN,inbox.dev.PORT,ledger.dev.API_TOKEN,ledger.dev.PORT: nobody answered the app's prompt within 3 seconds, so nothing was imported
+<time> allowed ask approval pid <n> keys inbox.dev.API_TOKEN,inbox.dev.PORT,ledger.dev.API_TOKEN,ledger.dev.PORT (store import)
+<time> denied  store import pid <n> keys inbox.dev.API_TOKEN,inbox.dev.PORT,ledger.dev.API_TOKEN,ledger.dev.PORT: a person refused the import in the app, so nothing was imported
+<time> allowed ask approval pid <n> keys inbox.dev.API_TOKEN,inbox.dev.PORT,ledger.dev.API_TOKEN,ledger.dev.PORT (store import)
+<time> allowed store import pid <n> keys inbox.dev.API_TOKEN,inbox.dev.PORT,ledger.dev.API_TOKEN,ledger.dev.PORT
+<time> allowed ask approval pid <n> keys pager.dev.API_TOKEN (store import)
+<time> allowed unlock pid <n>
+<time> allowed store import pid <n> keys pager.dev.API_TOKEN

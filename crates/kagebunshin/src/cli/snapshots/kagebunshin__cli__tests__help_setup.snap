@@ -1,0 +1,16 @@
+---
+source: crates/kagebunshin/src/cli/mod.rs
+expression: sub.clone().render_help().to_string()
+---
+Set kagebunshin up once for this user: config, store, daemon
+
+Usage: kagebunshin setup [OPTIONS]
+
+Options:
+      --json            Print machine-readable JSON; errors go to stderr as JSON
+      --no-service      Do not install the service or the app's launcher and login entries; unlock a daemon already running
+      --socket <PATH>   Daemon socket [default: $KAGEBUNSHIN_SOCKET, else a per-user runtime dir]
+      --env <ENV>       Environment to use instead of the project's default
+      --project <NAME>  Project to use instead of the one for this folder; it must claim this checkout's remotes
+  -h, --help            Print help (see more with '--help')
+  -V, --version         Print version

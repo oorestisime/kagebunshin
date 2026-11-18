@@ -1,0 +1,205 @@
+---
+source: crates/e2e/tests/walk.rs
+expression: text
+---
+######## 62. Production: the agent marks what is named so, the human decides the rest
+
+-- api's prod was drafted from a workflow and marked in A; here is one added by hand, read with the production account's profile
+
+$ kagebunshin project add-env api production
+warning: environment production of project api looks like production (its name has the segment production) and waits for a human decision; mark it sensitive with `kagebunshin mark env api production`, since it is production by its name, or ask the human: open the app (`kagebunshin app`) and either mark api/production sensitive or acknowledge it is not production
+added environment production to project api
+
+$ kagebunshin project add-source api production --provider aws_sm --secret acme/prod/api --profile acme-prod
+added a source to environment production of project api; it replaces the default source, the local store's section, unless you add `--provider file` too
+
+$ kagebunshin --env production run -- ./test.sh
+kagebunshin: environment production of project api looks like production (its name has the segment production) and waits for a human decision
+hint: it is production by its name: mark it sensitive with `kagebunshin mark env api production`; its values are then handed out once the human approves the request in the app
+[exit 5]
+
+$ kagebunshin --json --env production run -- ./test.sh
+{"code":"sensitive_env","message":"environment production of project api looks like production (its name has the segment production) and waits for a human decision","hint":"it is production by its name: mark it sensitive with `kagebunshin mark env api production`; its values are then handed out once the human approves the request in the app","who":"agent","tell":null}
+[exit 5]
+
+$ kagebunshin --env production status
+daemon: unlocked
+providers:
+  aws_sm  profile acme-prod  ok
+project: api
+env: production
+2 keys
+  API_KEY  aws_sm:acme/prod/api  sensitive
+  API_URL  aws_sm:acme/prod/api  sensitive
+missing (in .env.example, set by no source):
+  DATABASE_URL
+  SIGNING_KEY
+  LOG_LEVEL
+shared with other environments (marking production sensitive leaves these unmarked unless noted; a human can mark them as well in the app):
+  aws_sm:acme/prod/api  also read by api.prod  sensitive: each of them needs approval for its keys
+to fill in what is missing:
+  you can run:
+    kagebunshin project set-var api production LOG_LEVEL info
+      (only if .env.example's value is the real setting, not a placeholder; a secret belongs in the store or a provider)
+warning: environment production of project api looks like production (its name has the segment production) and waits for a human decision; mark it sensitive with `kagebunshin mark env api production`, since it is production by its name, or ask the human: open the app (`kagebunshin app`) and either mark api/production sensitive or acknowledge it is not production
+
+$ kagebunshin --env production next
+project api, environment production: 2 of 5 keys set, and it is production by its name: mark it sensitive
+next (you): mark api.production sensitive: it is production by its name, so its values are handed out only once the human approves the request in the app
+  kagebunshin mark env api production
+
+$ kagebunshin next
+project api, environment dev: 5 of 5 keys set, proven; an environment named production is left to mark
+next (you): mark api.production sensitive: it is production by its name, so its values are handed out only once the human approves the request in the app
+  kagebunshin mark env api production
+
+-- the agent marks it: no passphrase, no human
+
+$ kagebunshin mark env api production
+marked sensitive
+
+$ kagebunshin --env production next
+refusing environment production of project api: it is marked sensitive, so an agent is not shown what it holds and nothing here is yours to set up; `kagebunshin --env production run -- COMMAND` gets its values once the human approves it in the app
+
+$ kagebunshin next
+project api, environment dev: done. 5 of 5 keys set; `./test.sh` ran with them on <day>. They come from aws_sm:acme/dev/api (2), aws_sm:acme/dev/db (1), aws_sm:acme/dev/signing (1), the project file (1).
+
+-- there is no command that takes a mark off or says it is not production
+
+$ kagebunshin unmark env api production
+error: unrecognized subcommand 'unmark'
+
+  tip: a similar subcommand exists: 'mark'
+
+Usage: kagebunshin [OPTIONS] <COMMAND>
+
+For more information, try '--help'.
+[exit 2]
+
+$ kagebunshin mark --help | grep -E '^  [a-z]'
+  env     Mark an environment, and the secrets only its sources read
+  secret  Mark one secret, wherever it is read
+  key     Mark one key of the local store
+  help    Print this message or the help of the given subcommand(s)
+
+-- the store takes the passphrase to write: the mark waits beside it until the next unlock
+
+$ ls $HOME/.config/kagebunshin | grep store
+store.age
+store.age.lock
+store.age.marks
+
+$ kagebunshin lock
+locked
+
+(human) $ kagebunshin unlock
+Passphrase for the local store: 
+unlocked
+
+$ ls $HOME/.config/kagebunshin | grep store
+store.age
+store.age.lock
+
+$ kagebunshin --env prod run -- ./test.sh
+kagebunshin: refusing environment prod of project api: it is marked sensitive; handing it out takes approval in the app, which is not open
+hint: once the app is open, run the command again; the app asks to approve it
+ask the human: open the app (`kagebunshin app`), so a request for values marked sensitive can be approved there
+[exit 5]
+
+-- what only may be production is the human's to decide: an environment named rc
+
+$ kagebunshin project add-env api rc
+warning: environment rc of project api looks like production (its name has the segment rc) and waits for a human decision; ask the human: open the app (`kagebunshin app`) and either mark api/rc sensitive or acknowledge it is not production
+added environment rc to project api
+
+$ kagebunshin --env rc next
+project api, environment rc: 0 of 5 keys set, and it waits for the human's decision in the app
+waiting on the human; tell them:
+  - Please run `kagebunshin store set api.rc API_KEY API_URL DATABASE_URL SIGNING_KEY` in a terminal; it asks for the store passphrase, then each value.
+  - Please open the kagebunshin app and decide about api.rc, which looks like production (its name has the segment rc): mark it sensitive, or acknowledge it is not production. Until then a run with it is refused, or asks you in the app.
+nothing more you can do until the human has done the above
+
+$ kagebunshin project add-env shop prod
+warning: environment prod of project shop looks like production (its name has the segment prod) and waits for a human decision; mark it sensitive with `kagebunshin mark env shop prod`, since it is production by its name, or ask the human: open the app (`kagebunshin app`) and either mark shop/prod sensitive or acknowledge it is not production
+added environment prod to project shop
+
+-- the human, in the app: api/rc -> Mark sensitive
+
+-- both are marked sensitive, and the app is closed: refused at once
+
+$ kagebunshin --env prod run -- ./test.sh
+kagebunshin: refusing environment prod of project api: it is marked sensitive; handing it out takes approval in the app, which is not open
+hint: once the app is open, run the command again; the app asks to approve it
+ask the human: open the app (`kagebunshin app`), so a request for values marked sensitive can be approved there
+[exit 5]
+
+$ kagebunshin --env prod next
+refusing environment prod of project api: it is marked sensitive, so an agent is not shown what it holds and nothing here is yours to set up; `kagebunshin --env prod run -- COMMAND` gets its values once the human approves it in the app
+
+-- the app is open: the run waits and the app asks. The human closes the app with no answer, and the run is refused
+
+$ kagebunshin --env prod run -- ./test.sh
+kagebunshin: refusing environment prod of project api: it is marked sensitive; handing it out takes approval in the app, which is not open
+hint: once the app is open, run the command again; the app asks to approve it
+ask the human: open the app (`kagebunshin app`), so a request for values marked sensitive can be approved there
+[exit 5]
+
+-- the app is open and the human does not answer: the run is refused once `approval_timeout` in config.toml is over (3 seconds here, 5 minutes unless set), and says what it asked for
+
+$ kagebunshin --env prod run -- ./test.sh
+kagebunshin: environment prod of project api: nobody answered the app's prompt within 3 seconds, so nothing was handed out. It asked for every value of the environment, which is marked sensitive
+hint: run the command again once the human is at the screen: the app's window shows this command and takes the store's passphrase
+ask the human: approve the request in the app (`kagebunshin app`) when it asks
+[exit 5]
+
+-- the human clicks Deny
+
+$ kagebunshin --env prod run -- ./test.sh
+kagebunshin: environment prod of project api: a person denied the request in the app, so nothing was handed out. It asked for every value of the environment, which is marked sensitive
+hint: a person refused this in the app: ask them before running it again
+[exit 5]
+
+-- the human types the passphrase and clicks Approve
+
+$ kagebunshin --env prod run -- ./test.sh
+kagebunshin: warning: 2 keys in .env.example are not set by any source: SIGNING_KEY, LOG_LEVEL
+ok   API_KEY
+ok   API_URL
+ok   DATABASE_URL
+MISSING SIGNING_KEY
+MISSING LOG_LEVEL
+[exit 1]
+
+-- the human, in the app: shop/prod -> Not production
+
+$ kagebunshin --env prod status
+daemon: unlocked
+providers:
+  file  local store  ok
+project: shop
+env: prod
+0 keys
+missing (in .env.example, set by no source):
+  DATABASE_URL
+  STRIPE_SECRET
+  PORT
+to fill in what is missing:
+  you can run:
+    kagebunshin project set-var shop prod PORT 3000
+      (only if .env.example's value is the real setting, not a placeholder; a secret belongs in the store or a provider)
+  ask the human:
+    kagebunshin store set shop.prod DATABASE_URL STRIPE_SECRET
+      (it asks for the store passphrase, then each value)
+
+$ kagebunshin --env prod run -- ./test.sh
+kagebunshin: warning: 3 keys in .env.example are not set by any source: DATABASE_URL, STRIPE_SECRET, PORT
+MISSING DATABASE_URL
+MISSING STRIPE_SECRET
+MISSING PORT
+[exit 1]
+
+-- what the human decided, an agent's mark does not undo
+
+$ kagebunshin mark env shop prod
+kagebunshin: environment prod of project shop is acknowledged as not production; a human decided that, and only they change it, in the app
+[exit 5]

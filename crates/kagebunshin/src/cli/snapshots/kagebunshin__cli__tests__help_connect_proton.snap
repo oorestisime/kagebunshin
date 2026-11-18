@@ -1,0 +1,16 @@
+---
+source: crates/kagebunshin/src/cli/mod.rs
+expression: text
+---
+Save a Proton Pass personal access token in the local store, after checking it logs in
+
+Usage: kagebunshin connect proton [OPTIONS]
+
+Options:
+      --expires <EXPIRES>  When the token expires (YYYY-MM-DD, as Proton shows it), so status warns 14 days before
+      --json               Print machine-readable JSON; errors go to stderr as JSON
+      --socket <PATH>      Daemon socket [default: $KAGEBUNSHIN_SOCKET, else a per-user runtime dir]
+      --env <ENV>          Environment to use instead of the project's default
+      --project <NAME>     Project to use instead of the one for this folder; it must claim this checkout's remotes
+  -h, --help               Print help (see more with '--help')
+  -V, --version            Print version

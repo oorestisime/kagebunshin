@@ -1,0 +1,44 @@
+---
+source: crates/kagebunshin/src/cli/mod.rs
+expression: root.render_help().to_string()
+---
+A local secrets broker for developers and coding agents
+
+Usage: kagebunshin [OPTIONS] <COMMAND>
+
+Commands:
+  run        Run a command with the project's secrets in its environment
+  next       Print the next step toward a working setup of this checkout
+  status     Show the daemon and where each key comes from
+  diff       Show keys that are missing, overridden or changed
+  sync       Refresh cached values from their sources
+  unlock     Unlock the daemon and the local store
+  lock       Lock the daemon and the local store, dropping every value held in memory
+  get        Print one value (human callers only: asks for the store passphrase)
+  setup      Set kagebunshin up once for this user: config, store, daemon
+  uninstall  Remove kagebunshin from this machine: the service, skills and binaries
+  app        Open the window: each project's keys by environment, marks and the audit log
+  init       Print instructions that teach a coding agent to set up and use kagebunshin
+  hook       Agent hooks: tell a session in a registered project how to run commands, and refuse writing a .env file there
+  project    Create projects and add environments and sources, without editing TOML
+  connect    Connect a provider: set up its credentials and check they work
+  list       List what the providers can read: names, ids and keys, never values
+  search     Find names or keys that contain TEXT, ignoring case (never values)
+  aws        Look up AWS Secrets Manager secret names (never values)
+  import     Install a mapping file someone handed you into ~/.config/kagebunshin/projects/
+  onboard    Start using kagebunshin in these checkouts, with one passphrase
+  export     Write a copy of a project's mapping file (no secret values) to hand to someone
+  store      Manage the local encrypted store
+  mark       Mark an environment, a secret or a store key sensitive
+  audit      Show the audit log
+  daemon     Run the daemon in the foreground or as a service, or check on it
+  remote     Let other machines on your tailnet use this daemon, and say which
+  help       Print this message or the help of the given subcommand(s)
+
+Options:
+      --json            Print machine-readable JSON; errors go to stderr as JSON
+      --socket <PATH>   Daemon socket [default: $KAGEBUNSHIN_SOCKET, else a per-user runtime dir]
+      --env <ENV>       Environment to use instead of the project's default
+      --project <NAME>  Project to use instead of the one for this folder; it must claim this checkout's remotes
+  -h, --help            Print help
+  -V, --version         Print version

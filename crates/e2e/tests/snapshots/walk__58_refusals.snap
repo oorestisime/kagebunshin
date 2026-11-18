@@ -1,0 +1,61 @@
+---
+source: crates/e2e/tests/walk.rs
+expression: text
+---
+######## 58. Refusals name what the agent can do, and who does the rest
+
+$ kagebunshin --env staging status
+kagebunshin: project api has no environment staging
+hint: add it with `kagebunshin project add-env api staging`
+[exit 1]
+
+$ kagebunshin --json --env staging status
+{"code":"config","message":"project api has no environment staging","hint":"add it with `kagebunshin project add-env api staging`","who":"agent","tell":null}
+[exit 1]
+
+-- locked
+
+$ kagebunshin lock
+locked
+
+$ kagebunshin run -- ./test.sh
+kagebunshin: the daemon is locked
+ask the human: unlock kagebunshin: run `kagebunshin unlock` in a terminal
+[exit 5]
+
+$ kagebunshin --json run -- ./test.sh
+{"code":"locked","message":"the daemon is locked","hint":"unlock kagebunshin: run `kagebunshin unlock` in a terminal","who":"human","tell":"unlock kagebunshin: run `kagebunshin unlock` in a terminal"}
+[exit 5]
+
+$ kagebunshin next
+the kagebunshin daemon is locked
+waiting on the human; tell them:
+  - Please run `kagebunshin unlock` in a terminal; it asks for the store passphrase.
+nothing more you can do until the human has done the above
+
+(hook) start
+kagebunshin: this folder is in project api, registered with kagebunshin. Its secrets come from kagebunshin, not from a .env file: run commands that need them as `kagebunshin run -- COMMAND` (`--env ENV` for another environment). Writing a .env file here is refused. The kagebunshin skill has the rest. The kagebunshin daemon is locked, so `kagebunshin run` fails until the human unlocks it with `kagebunshin unlock`. It has not been shown to work yet: run `kagebunshin next` and do what it says.
+
+(human) $ kagebunshin unlock
+Passphrase for the local store: 
+unlocked
+
+-- daemon not running
+
+$ kagebunshin run -- ./test.sh
+kagebunshin: the daemon is not running (no socket at $T/run/kb.sock)
+ask the human: run `kagebunshin daemon install` once, or start an installed one with `systemctl --user start kagebunshin`, or run `kagebunshin daemon` in another terminal
+[exit 3]
+
+$ kagebunshin next
+the kagebunshin daemon is not running, and is not installed as a service
+waiting on the human; tell them:
+  - Please run `kagebunshin setup` in a terminal; it asks for the store passphrase, installs the daemon as a service, starts it and unlocks it. If you start the daemon by hand instead, run `kagebunshin daemon` in another terminal, then `kagebunshin unlock`.
+nothing more you can do until the human has done the above
+
+(hook) start
+kagebunshin: this folder is in project api, registered with kagebunshin. Its secrets come from kagebunshin, not from a .env file: run commands that need them as `kagebunshin run -- COMMAND` (`--env ENV` for another environment). Writing a .env file here is refused. The kagebunshin skill has the rest. The kagebunshin daemon is not running, so `kagebunshin run` fails until the human starts it: run `kagebunshin daemon install` once, or start an installed one with `systemctl --user start kagebunshin`, or run `kagebunshin daemon` in another terminal. It has not been shown to work yet: run `kagebunshin next` and do what it says.
+
+(human) $ kagebunshin unlock
+Passphrase for the local store: 
+unlocked

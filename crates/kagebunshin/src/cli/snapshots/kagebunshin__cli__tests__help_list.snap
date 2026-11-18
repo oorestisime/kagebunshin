@@ -1,0 +1,20 @@
+---
+source: crates/kagebunshin/src/cli/mod.rs
+expression: sub.clone().render_help().to_string()
+---
+List what the providers can read: names, ids and keys, never values
+
+Usage: kagebunshin list [OPTIONS]
+
+Options:
+      --json                 Print machine-readable JSON; errors go to stderr as JSON
+      --provider <PROVIDER>  Only this provider [possible values: aws_sm, file, proton]
+      --prefix <PREFIX>      Only names that start with this, e.g. widget/dev/
+      --socket <PATH>        Daemon socket [default: $KAGEBUNSHIN_SOCKET, else a per-user runtime dir]
+      --env <ENV>            Environment to use instead of the project's default
+      --keys                 Also read each AWS secret's key names, never its values
+      --profile <PROFILE>    The AWS profile [default: the one this checkout's project reads AWS with, else `[aws]` in config.toml, else the ambient configuration]
+      --project <NAME>       Project to use instead of the one for this folder; it must claim this checkout's remotes
+      --region <REGION>      The AWS region [default: this checkout's project's, else `[aws]` in config.toml, else the profile's]
+  -h, --help                 Print help (see more with '--help')
+  -V, --version              Print version

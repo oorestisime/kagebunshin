@@ -1,0 +1,23 @@
+---
+source: crates/kagebunshin/src/cli/mod.rs
+expression: sub.clone().render_help().to_string()
+---
+Open the window: each project's keys by environment, marks and the audit log
+
+Usage: kagebunshin app [OPTIONS]
+       kagebunshin app <COMMAND>
+
+Commands:
+  install    Add the app to the launcher and start it in the tray at login (Linux)
+  uninstall  Remove the launcher entry, the login entry and the icon
+  help       Print this message or the help of the given subcommand(s)
+
+Options:
+      --hidden          Start in the tray, with no window, as at login
+      --json            Print machine-readable JSON; errors go to stderr as JSON
+      --quit            End the app that is running
+      --socket <PATH>   Daemon socket [default: $KAGEBUNSHIN_SOCKET, else a per-user runtime dir]
+      --env <ENV>       Environment to use instead of the project's default
+      --project <NAME>  Project to use instead of the one for this folder; it must claim this checkout's remotes
+  -h, --help            Print help (see more with '--help')
+  -V, --version         Print version

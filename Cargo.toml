@@ -1,0 +1,63 @@
+[workspace]
+members = ["crates/kagebunshin", "crates/kagebunshin-app", "crates/e2e"]
+default-members = ["crates/kagebunshin"]
+resolver = "3"
+
+[workspace.package]
+version = "0.0.1-alpha.10"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT"
+repository = "https://github.com/oorestisime/kagebunshin"
+
+[workspace.lints.rust]
+# Only modules under `src/sys/` may opt back in, with a module-level allow.
+unsafe_code = "deny"
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
+# Return errors, don't panic, and write output only through the CLI's output
+# layer. Tests are exempt (clippy.toml, and a crate-level allow in each tests/
+# file); other exceptions are scoped, with a reason.
+unwrap_used = "deny"
+expect_used = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+pedantic = { level = "warn", priority = -1 }
+# Pedantic lints that are noise here, each with its reason.
+# The crates are not a published library: #[must_use] and `# Errors`/`# Panics`
+# sections on every public item would be boilerplate, not documentation.
+must_use_candidate = "allow"
+return_self_not_must_use = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+# `s.push_str(&format!(..))` reads better than `write!` into a String, whose
+# infallible Result then has to be discarded.
+format_push_string = "allow"
+# Splitting long command and test functions would be churn, not clarity.
+too_many_lines = "allow"
+# Integer casts at OS and wire boundaries (pid_t, socklen_t, exit codes, frame
+# lengths) are kernel-bounded or checked first; try_from would add error paths
+# that cannot be reached.
+cast_possible_wrap = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+# Short names in layout maths and test fixtures; helper items next to their only use.
+many_single_char_names = "allow"
+items_after_statements = "allow"
+# `|k| k.as_str()` reads better than a fully qualified method path.
+redundant_closure_for_method_calls = "allow"
+# Owned arguments mirror what clap and the wire hand over; borrowing them would
+# ripple through every caller for no gain.
+needless_pass_by_value = "allow"
+# Deliberate pairs (lost/kept, woke/wakes) are clearer than renamed ones.
+similar_names = "allow"
+# Counting newlines for an error position does not justify the bytecount crate.
+naive_bytecount = "allow"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

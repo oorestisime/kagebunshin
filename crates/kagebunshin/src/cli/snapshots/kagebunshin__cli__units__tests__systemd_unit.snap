@@ -1,0 +1,20 @@
+---
+source: crates/kagebunshin/src/cli/units.rs
+expression: unit
+---
+# Written by `kagebunshin daemon install`; `kagebunshin daemon uninstall` removes it.
+[Unit]
+Description=kagebunshin daemon: hands secrets to the commands it runs
+Documentation=https://github.com/oorestisime/kagebunshin
+
+[Service]
+ExecStart="/home/o/.cargo/bin/kagebunshin" --socket "/run/user/1000/kagebunshin/kagebunshind.sock" daemon run
+Restart=on-failure
+RestartSec=2
+# The daemon also turns core dumps off itself.
+LimitCORE=0
+NoNewPrivileges=yes
+UMask=0077
+
+[Install]
+WantedBy=default.target

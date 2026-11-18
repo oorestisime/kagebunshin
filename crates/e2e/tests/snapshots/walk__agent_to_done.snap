@@ -1,0 +1,104 @@
+---
+source: crates/e2e/tests/walk.rs
+expression: text
+---
+######## A. The agent walks api to done with next
+
+(hook) start
+kagebunshin: this folder is in project api, registered with kagebunshin. Its secrets come from kagebunshin, not from a .env file: run commands that need them as `kagebunshin run -- COMMAND` (`--env ENV` for another environment). Writing a .env file here is refused. The kagebunshin skill has the rest. It has not been shown to work yet: run `kagebunshin next` and do what it says.
+
+$ kagebunshin next
+project api, environment dev: 3 of 5 keys set
+next (you): set LOG_LEVEL as a plain setting to .env.example's value, only if that is the real setting and not a placeholder (a secret belongs in the store or a provider)
+  kagebunshin project set-var api dev LOG_LEVEL info
+
+$ kagebunshin project set-var api dev LOG_LEVEL info
+set LOG_LEVEL for environment dev of project api
+
+$ kagebunshin next
+project api, environment dev: 4 of 5 keys set
+next (you): SIGNING_KEY is set by no source: `kagebunshin list --keys --prefix acme/dev/` names each secret under acme/dev/ and its keys (drop `--prefix` to look everywhere). Add the one that holds it with `kagebunshin project add-source api dev --provider aws_sm --secret NAME --profile acme-dev`; for a secret that is one plain string, not JSON, add `--key KEY` too. If none holds it, run `kagebunshin project add-source api dev --provider file`: the human then types its value into the local store
+  kagebunshin list --keys --prefix acme/dev/
+
+$ kagebunshin list --keys --prefix acme/dev/
+4 matches
+  acme/dev/api      aws_sm  API_KEY, API_URL
+  acme/dev/db       aws_sm  DATABASE_URL
+  acme/dev/queue    aws_sm  QUEUE_URL
+  acme/dev/signing  aws_sm  (a plain string, not JSON)
+
+$ kagebunshin project add-source api dev --provider aws_sm --secret acme/dev/signing --key SIGNING_KEY --profile acme-dev
+added a source to environment dev of project api
+
+$ kagebunshin next
+project api, environment dev: 5 of 5 keys set, not yet proven
+next (you): prove the setup: run the project's tests or its start command with its keys; pick the command
+  kagebunshin run --strict -- COMMAND
+
+-- a failing command proves nothing
+
+$ kagebunshin run --strict -- false
+[exit 1]
+
+$ kagebunshin next
+project api, environment dev: 5 of 5 keys set, not yet proven
+next (you): prove the setup: run the project's tests or its start command with its keys; pick the command
+  kagebunshin run --strict -- COMMAND
+
+$ kagebunshin run --strict -- ./test.sh
+ok   API_KEY
+ok   API_URL
+ok   DATABASE_URL
+ok   SIGNING_KEY
+ok   LOG_LEVEL
+
+$ kagebunshin next
+project api, environment dev: 5 of 5 keys set, proven; an environment named production is left to mark
+next (you): mark api.prod sensitive: it is production by its name, so its values are handed out only once the human approves the request in the app
+  kagebunshin mark env api prod
+
+-- 78: the prod environment the draft took from deploy-prod.yml is the agent's to mark
+
+$ kagebunshin mark env api prod
+marked sensitive
+
+$ kagebunshin next
+project api, environment dev: done. 5 of 5 keys set; `./test.sh` ran with them on <day>. They come from aws_sm:acme/dev/api (2), aws_sm:acme/dev/db (1), aws_sm:acme/dev/signing (1), the project file (1).
+
+$ kagebunshin --json next
+{"project":"api","env":"dev","done":true,"keys":{"set":5,"wanted":5},"headline":"project api, environment dev: done. 5 of 5 keys set; `./test.sh` ran with them on <day>. They come from aws_sm:acme/dev/api (2), aws_sm:acme/dev/db (1), aws_sm:acme/dev/signing (1), the project file (1).","step":null,"human":[]}
+
+$ kagebunshin status
+daemon: unlocked
+providers:
+  aws_sm  profile acme-dev  ok
+project: api
+env: dev
+5 keys
+  API_KEY       aws_sm:acme/dev/api
+  API_URL       aws_sm:acme/dev/api
+  DATABASE_URL  aws_sm:acme/dev/db
+  LOG_LEVEL     project file             = info
+  SIGNING_KEY   aws_sm:acme/dev/signing
+shared with other environments (marking dev sensitive leaves these unmarked unless noted; a human can mark them as well in the app):
+  aws_sm:acme/dev/api  also read by mono-worker.dev
+every key set; `./test.sh` ran with them on <day>
+
+(hook) start
+kagebunshin: this folder is in project api, registered with kagebunshin. Its secrets come from kagebunshin, not from a .env file: run commands that need them as `kagebunshin run -- COMMAND` (`--env ENV` for another environment). Writing a .env file here is refused. The kagebunshin skill has the rest.
+
+-- the proof is dropped when the environment changes, and comes back when it is put back
+
+$ kagebunshin project set-var api dev EXTRA 1
+set EXTRA for environment dev of project api
+
+$ kagebunshin next
+project api, environment dev: 5 of 5 keys set, not yet proven
+next (you): prove the setup: run the project's tests or its start command with its keys; pick the command
+  kagebunshin run --strict -- COMMAND
+
+$ kagebunshin project unset-var api dev EXTRA
+removed EXTRA from environment dev of project api
+
+$ kagebunshin next
+project api, environment dev: done. 5 of 5 keys set; `./test.sh` ran with them on <day>. They come from aws_sm:acme/dev/api (2), aws_sm:acme/dev/db (1), aws_sm:acme/dev/signing (1), the project file (1).

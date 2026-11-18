@@ -1,0 +1,87 @@
+---
+source: crates/e2e/tests/walk.rs
+expression: text
+---
+######## 80. An app with no .env.example is done without one, and is offered it
+
+(human) $ kagebunshin onboard kiosk
+onboarding $T/work/kiosk: import .env into new project kiosk
+Passphrase for the local store (to import 1 .env file): 
+importing $T/work/kiosk/.env into [kiosk.dev]
+writing 5 keys from 1 file to the local store
+reading the state of kiosk
+
+kiosk ($T/work/kiosk): created project kiosk with environment dev, and put 5 keys from .env in the local store's [kiosk.dev]: API_TOKEN, DB_URL, MAIL_TOKEN, QUEUE_URL, SESSION_SECRET
+  environment dev: 5 of 5 keys set
+  ready: your agent proves it with a run
+
+Then, in each checkout above that is not done, paste this line into your coding agent:
+  Set up kagebunshin here: run `kagebunshin next` and do what it says until it says done.
+
+Delete $T/work/kiosk/.env now that its values are in the store? [y/N] kept $T/work/kiosk/.env; delete it once `kagebunshin run -- COMMAND` works
+
+-- with no list of its keys, a command gets all five
+
+$ kagebunshin run -- sh -c "env | cut -d= -f1 | grep -xE 'API_TOKEN|DB_URL|MAIL_TOKEN|QUEUE_URL|SESSION_SECRET' | sort"
+kagebunshin: warning: no .env.example found, so every key the environment has is passed (5 keys); `kagebunshin project example` writes one from the keys the code reads, to pass only those
+API_TOKEN
+DB_URL
+MAIL_TOKEN
+QUEUE_URL
+SESSION_SECRET
+
+-- the list is no step: the proof is next, and setup is done with all five
+
+$ kagebunshin next
+project kiosk, environment dev: 5 keys set (no .env.example to compare with), not yet proven
+next (you): prove the setup: run the project's tests or its start command with its keys; pick the command
+  kagebunshin run --strict -- COMMAND
+
+$ kagebunshin run --strict -- sh -c "env | cut -d= -f1 | grep -xE 'API_TOKEN|DB_URL|MAIL_TOKEN|QUEUE_URL|SESSION_SECRET' | sort"
+kagebunshin: warning: no .env.example found, so every key the environment has is passed (5 keys); `kagebunshin project example` writes one from the keys the code reads, to pass only those
+API_TOKEN
+DB_URL
+MAIL_TOKEN
+QUEUE_URL
+SESSION_SECRET
+
+-- done, with the list suggested: the agent passes that on, and writes it if asked
+
+$ kagebunshin next
+project kiosk, environment dev: done. 5 of 5 keys set; `sh` ran with them on <day>. They come from file:kiosk.dev (5).
+suggested, not needed: this app has no .env.example, so a command run here gets all 5 keys of the environment. `kagebunshin project example` writes one from the 3 keys kagebunshin finds its code reading, names only, and a command then gets those and no more.
+left for the human, when they like; tell them:
+  - $T/work/kiosk/.env still holds values in plain text, and kiosk now gets its secrets from kagebunshin: delete the file once nothing in it is still needed (`rm $T/work/kiosk/.env`).
+
+-- asked: the command reads the code, never the .env
+
+$ kagebunshin project example
+wrote $T/work/kiosk/.env.example with the 3 keys the code reads, names only:
+  API_TOKEN  (src/env.ts, src/server.ts)
+  DB_URL  (src/server.ts)
+  SESSION_SECRET  (src/env.ts)
+check it against the code: add a key it reads another way, and take out a name the app runs without. A command run here now gets only the keys listed, and each must be set: `kagebunshin next` says which are not.
+
+$ cat .env.example
+# The environment keys this app reads, by name. No values here.
+API_TOKEN=
+DB_URL=
+SESSION_SECRET=
+
+-- it is written once, and the agent's to edit from then on
+
+$ kagebunshin project example
+kagebunshin: this app has a .env.example; edit it to change the keys a command gets
+[exit 1]
+
+-- now a command gets the three the app reads, and nothing more is suggested
+
+$ kagebunshin run --strict -- sh -c "env | cut -d= -f1 | grep -xE 'API_TOKEN|DB_URL|MAIL_TOKEN|QUEUE_URL|SESSION_SECRET' | sort"
+API_TOKEN
+DB_URL
+SESSION_SECRET
+
+$ kagebunshin next
+project kiosk, environment dev: done. 3 of 3 keys set; `sh` ran with them on <day>. They come from file:kiosk.dev (3).
+left for the human, when they like; tell them:
+  - $T/work/kiosk/.env still holds values in plain text, and kiosk now gets its secrets from kagebunshin: delete the file once nothing in it is still needed (`rm $T/work/kiosk/.env`).

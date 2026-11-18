@@ -1,0 +1,19 @@
+---
+source: crates/kagebunshin/src/cli/desktop.rs
+expression: "entry(cli, socket, false).unwrap()"
+---
+[Desktop Entry]
+Type=Application
+Name=Kagebunshin
+Comment=Your projects' secrets: keys, approvals and the audit log
+Icon=io.github.oorestisime.kagebunshin
+Terminal=false
+Exec="/home/someone/.local/bin/kagebunshin" --socket "/run/user/1000/kagebunshin/kagebunshind.sock" app
+Categories=Utility;
+StartupWMClass=io.github.oorestisime.kagebunshin
+Actions=quit;
+X-Kagebunshin-Managed=true
+
+[Desktop Action quit]
+Name=Quit Kagebunshin
+Exec="/home/someone/.local/bin/kagebunshin" --socket "/run/user/1000/kagebunshin/kagebunshind.sock" app --quit

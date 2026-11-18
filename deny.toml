@@ -1,0 +1,59 @@
+# cargo-deny configuration: https://embarkstudios.github.io/cargo-deny/
+
+[graph]
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+]
+
+[advisories]
+yanked = "deny"
+ignore = [
+    # Both entries are unmaintained crates with no fixed release, and both come in
+    # only through the i18n proc macros age uses to embed its localised messages
+    # (i18n-embed-fl, i18n-embed-impl). They run at compile time and are not in
+    # the kagebunshin binary. Drop them once age moves to other i18n tooling.
+    { id = "RUSTSEC-2026-0374", reason = "basic-toml: compile-time only, via i18n-config in age's i18n proc macros" },
+    { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2: compile-time only, via the i18n-embed-fl proc macro" },
+    # Unmaintained, not vulnerable: folded into zbus 6. They reach only
+    # kagebunshin-app, through Rune's Linux accessibility bridge (accesskit_unix,
+    # atspi). Drop them when accesskit moves to zbus 6.
+    { id = "RUSTSEC-2026-0370", reason = "zvariant: app only, via accesskit_unix; merged into zbus 6" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names: app only, via accesskit_unix; merged into zbus 6" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: app only, via accesskit_unix; merged into zbus 6" },
+    # Unmaintained, not vulnerable, and in tests only: it comes through
+    # aws-smithy-protocol-test, which the `test-util` feature of
+    # aws-smithy-http-client brings in for our dev-dependencies. No released
+    # binary has it (`cargo tree -i chrono -e normal,build` is empty). Drop it
+    # when the AWS SDK's test tooling moves off chrono.
+    { id = "RUSTSEC-2026-0543", reason = "chrono: tests only, via aws-smithy-protocol-test" },
+]
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+]
+confidence-threshold = 0.9
+
+[licenses.private]
+ignore = true
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# Rune, for kagebunshin-app only; pinned to a commit in its Cargo.toml.
+allow-git = ["https://github.com/anomalyco/rune"]

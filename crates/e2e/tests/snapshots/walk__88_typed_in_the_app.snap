@@ -1,0 +1,80 @@
+---
+source: crates/e2e/tests/walk.rs
+expression: text
+---
+######## 88. Secrets in no file: the agent asks, and the human types them in the app
+
+$ kagebunshin project init beacon
+created project beacon with environment dev
+
+-- the app is closed: typing them is the human's, and the command run anyway sets nothing
+
+$ kagebunshin next
+project beacon, environment dev: 0 of 2 keys set
+waiting on the human; tell them:
+  - Please run `kagebunshin store set beacon.dev API_TOKEN WEBHOOK_SECRET` in a terminal; it asks for the store passphrase, then each value. Or open the kagebunshin app (`kagebunshin app`) and say when it is open: I then run it, and you type the values in the app's window.
+nothing more you can do until the human has done the above
+
+$ kagebunshin store set beacon.dev API_TOKEN WEBHOOK_SECRET
+kagebunshin: with no terminal the values are typed into the app, which is not open; nothing was set
+hint: once the app is open, run the command again; the app asks for the values. In a terminal the command asks for them itself
+ask the human: open the app (`kagebunshin app`), so the values can be typed into it
+[exit 5]
+
+$ kagebunshin --json store set beacon.dev API_TOKEN WEBHOOK_SECRET
+{"code":"no_app","message":"with no terminal the values are typed into the app, which is not open; nothing was set","hint":"once the app is open, run the command again; the app asks for the values. In a terminal the command asks for them itself","who":"human","tell":"open the app (`kagebunshin app`), so the values can be typed into it"}
+[exit 5]
+
+-- the app is open: asking for them is the agent's step
+
+$ kagebunshin next
+project beacon, environment dev: 0 of 2 keys set
+next (you): ask the human for the missing secret values. It waits for the human to type them in the kagebunshin app, which has a field for each key and takes the store passphrase; no value passes through you: say so first, then run it
+  kagebunshin store set beacon.dev API_TOKEN WEBHOOK_SECRET
+
+-- the human clicks Deny: nothing is set
+
+$ kagebunshin store set beacon.dev API_TOKEN WEBHOOK_SECRET
+waiting for a person to type, in the kagebunshin app, the values of API_TOKEN, WEBHOOK_SECRET for [beacon.dev] of the local store: its window has a field for each key and takes the store's passphrase
+kagebunshin: a person refused, in the app, to type the values, so nothing was set
+hint: a person refused this in the app: ask them before running it again
+[exit 5]
+
+-- the human types one value and the passphrase, and clicks Save: the other key is as before
+
+$ kagebunshin store set beacon.dev API_TOKEN WEBHOOK_SECRET
+waiting for a person to type, in the kagebunshin app, the values of API_TOKEN, WEBHOOK_SECRET for [beacon.dev] of the local store: its window has a field for each key and takes the store's passphrase
+set API_TOKEN in [beacon.dev], typed in the app; WEBHOOK_SECRET was left empty there and is as before
+
+$ kagebunshin store list | grep beacon
+[beacon.dev]
+
+-- asked again, the human types both: the one there is replaced, which the agent is told
+
+$ kagebunshin --json store set beacon.dev API_TOKEN WEBHOOK_SECRET
+waiting for a person to type, in the kagebunshin app, the values of API_TOKEN, WEBHOOK_SECRET for [beacon.dev] of the local store: its window has a field for each key and takes the store's passphrase
+{"left":[],"locked":false,"replaced":["API_TOKEN"],"section":"beacon.dev","set":["API_TOKEN","WEBHOOK_SECRET"]}
+
+$ kagebunshin run --strict -- ./test.sh
+ok   API_TOKEN
+ok   WEBHOOK_SECRET
+
+-- what was typed is what a command gets: 14 characters each
+
+$ kagebunshin run -- sh -c 'echo "${#API_TOKEN} ${#WEBHOOK_SECRET}"'
+14 14
+
+$ kagebunshin next
+project beacon, environment dev: done. 2 of 2 keys set; `./test.sh` ran with them on <day>. They come from file:beacon.dev (2).
+
+-- each request is in the audit log, with the keys that were typed
+
+$ kagebunshin audit | grep -E 'beacon' | tail -8
+<time> denied  store set pid <n> keys beacon.dev.API_TOKEN,beacon.dev.WEBHOOK_SECRET: with no terminal the values are typed into the app, which is not open; nothing was set
+<time> denied  store set pid <n> keys beacon.dev.API_TOKEN,beacon.dev.WEBHOOK_SECRET: with no terminal the values are typed into the app, which is not open; nothing was set
+<time> allowed ask approval pid <n> keys beacon.dev.API_TOKEN,beacon.dev.WEBHOOK_SECRET (store set)
+<time> denied  store set pid <n> keys beacon.dev.API_TOKEN,beacon.dev.WEBHOOK_SECRET: a person refused, in the app, to type the values, so nothing was set
+<time> allowed ask approval pid <n> keys beacon.dev.API_TOKEN,beacon.dev.WEBHOOK_SECRET (store set)
+<time> allowed store set pid <n> keys beacon.dev.API_TOKEN
+<time> allowed ask approval pid <n> keys beacon.dev.API_TOKEN,beacon.dev.WEBHOOK_SECRET (store set)
+<time> allowed store set pid <n> keys beacon.dev.API_TOKEN,beacon.dev.WEBHOOK_SECRET

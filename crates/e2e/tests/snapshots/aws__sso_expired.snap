@@ -1,0 +1,37 @@
+---
+source: crates/e2e/tests/aws.rs
+expression: text
+---
+######## 
+
+$ kagebunshin project init app
+created project app with environment dev
+
+$ kagebunshin project add-source app dev --provider aws_sm --secret acme/dev/db --profile acme-sso
+added a source to environment dev of project app; it replaces the default source, the local store's section, unless you add `--provider file` too
+
+$ kagebunshin run -- true
+kagebunshin: cannot resolve environment dev of project app: profile acme-sso: credentials missing or expired (1 source, checked <time> UTC)
+ask the human: run `aws login --profile acme-sso` (`aws sso login` for an SSO profile)
+[exit 1]
+
+$ kagebunshin --json run -- true
+{"code":"source_failed","message":"cannot resolve environment dev of project app: profile acme-sso: credentials missing or expired (1 source, checked <time> UTC)","hint":"run `aws login --profile acme-sso` (`aws sso login` for an SSO profile)","who":"human","tell":"run `aws login --profile acme-sso` (`aws sso login` for an SSO profile)"}
+[exit 1]
+
+$ kagebunshin status
+kagebunshin: cannot resolve environment dev of project app: profile acme-sso: credentials missing or expired (1 source, checked <time> UTC)
+ask the human: run `aws login --profile acme-sso` (`aws sso login` for an SSO profile)
+[exit 1]
+
+$ kagebunshin next
+the environment cannot be resolved
+waiting on the human; tell them:
+  - Please run `aws login --profile acme-sso` in a terminal, so kagebunshin can read aws_sm (profile acme-sso).
+nothing more you can do until the human has done the above
+
+$ kagebunshin --json next
+{"project":null,"env":null,"done":false,"keys":null,"headline":"the environment cannot be resolved","step":null,"human":[{"what":"log in to aws_sm (profile acme-sso)","command":"aws login --profile acme-sso","tell":"Please run `aws login --profile acme-sso` in a terminal, so kagebunshin can read aws_sm (profile acme-sso)."}]}
+
+(hook) start
+kagebunshin: this folder is in project app, registered with kagebunshin. Its secrets come from kagebunshin, not from a .env file: run commands that need them as `kagebunshin run -- COMMAND` (`--env ENV` for another environment). Writing a .env file here is refused. The kagebunshin skill has the rest. It has not been shown to work yet: run `kagebunshin next` and do what it says.

@@ -1,0 +1,18 @@
+/target/
+
+# Never commit plaintext env files; .env.example (names only) is fine.
+.env
+.env.*
+!.env.example
+
+# Key material.
+*.pem
+*.key
+*.age
+
+# Editors and OS.
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store

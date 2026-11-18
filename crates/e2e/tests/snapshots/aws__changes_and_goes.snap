@@ -1,0 +1,64 @@
+---
+source: crates/e2e/tests/aws.rs
+expression: w.transcript()
+---
+######## 
+
+$ kagebunshin project init app
+created project app with environment dev
+
+$ kagebunshin project add-source app dev --provider aws_sm --secret live/token --key TOKEN --profile acme-dev
+added a source to environment dev of project app; it replaces the default source, the local store's section, unless you add `--provider file` too
+
+$ kagebunshin run -- sh -c 'echo the token has ${#TOKEN} characters'
+kagebunshin: warning: no .env.example found, so every key the environment has is passed (1 key); `kagebunshin project example` writes one from the keys the code reads, to pass only those
+the token has 3 characters
+
+-- AWS has a new value, five characters long
+
+$ kagebunshin run -- sh -c 'echo the token has ${#TOKEN} characters'
+kagebunshin: warning: no .env.example found, so every key the environment has is passed (1 key); `kagebunshin project example` writes one from the keys the code reads, to pass only those
+the token has 3 characters
+
+$ kagebunshin sync
+app dev: 1 key
+
+$ kagebunshin run -- sh -c 'echo the token has ${#TOKEN} characters'
+kagebunshin: warning: no .env.example found, so every key the environment has is passed (1 key); `kagebunshin project example` writes one from the keys the code reads, to pass only those
+the token has 5 characters
+
+-- the secret is deleted, with AWS's recovery window
+
+$ kagebunshin run -- sh -c 'echo the token has ${#TOKEN} characters'
+kagebunshin: warning: no .env.example found, so every key the environment has is passed (1 key); `kagebunshin project example` writes one from the keys the code reads, to pass only those
+the token has 5 characters
+
+$ kagebunshin sync
+app dev: failed: cannot resolve environment dev of project app: aws_sm secret live/token (profile acme-dev): secret live/token is marked for deletion
+kagebunshin: cannot resolve environment dev of project app: aws_sm secret live/token (profile acme-dev): secret live/token is marked for deletion
+hint: take it out with `kagebunshin project remove-source app dev 1`, or have the human restore it with `aws secretsmanager restore-secret`
+[exit 1]
+
+$ kagebunshin run -- sh -c 'echo the token has ${#TOKEN} characters'
+kagebunshin: cannot resolve environment dev of project app: aws_sm secret live/token (profile acme-dev): secret live/token is marked for deletion
+hint: take it out with `kagebunshin project remove-source app dev 1`, or have the human restore it with `aws secretsmanager restore-secret`
+[exit 1]
+
+$ kagebunshin status
+kagebunshin: cannot resolve environment dev of project app: aws_sm secret live/token (profile acme-dev): secret live/token is marked for deletion
+hint: take it out with `kagebunshin project remove-source app dev 1`, or have the human restore it with `aws secretsmanager restore-secret`
+[exit 1]
+
+$ kagebunshin next
+the environment cannot be resolved
+next (you): cannot resolve environment dev of project app: aws_sm secret live/token (profile acme-dev): secret live/token is marked for deletion; take it out with `kagebunshin project remove-source app dev 1`, or have the human restore it with `aws secretsmanager restore-secret`
+  kagebunshin project remove-source app dev 1
+
+-- and restored
+
+$ kagebunshin sync
+nothing is cached, so the next command reads every source afresh
+
+$ kagebunshin run -- sh -c 'echo the token has ${#TOKEN} characters'
+kagebunshin: warning: no .env.example found, so every key the environment has is passed (1 key); `kagebunshin project example` writes one from the keys the code reads, to pass only those
+the token has 5 characters
