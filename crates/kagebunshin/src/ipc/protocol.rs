@@ -974,6 +974,12 @@ pub struct PhoneView {
     /// seconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seen: Option<u64>,
+    /// It allowed notifications, so it is told of a request that waits.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub notifies: bool,
+    /// Why the last notification did not reach its push service.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub untold: Option<String>,
 }
 
 /// A pairing going on: which phone, and the seconds it has left.
@@ -1677,6 +1683,8 @@ mod tests {
                 node: "nPHONE".into(),
                 paired: 1_767_225_600,
                 seen: None,
+                notifies: false,
+                untold: None,
             }),
             url: Some("https://self.example.ts.net:47318".into()),
             problem: None,
@@ -1690,5 +1698,14 @@ mod tests {
                 "url": "https://self.example.ts.net:47318",
             })
         );
+        // One that allowed notifications, and what became of the last.
+        let mut told = status;
+        if let Some(phone) = &mut told.paired {
+            (phone.notifies, phone.untold) = (true, Some("it was not sent".into()));
+        }
+        let wire = serde_json::to_value(&told).unwrap();
+        assert_eq!(wire["paired"]["notifies"], json!(true));
+        assert_eq!(wire["paired"]["untold"], json!("it was not sent"));
+        assert_eq!(serde_json::from_value::<PhoneStatus>(wire).unwrap(), told);
     }
 }

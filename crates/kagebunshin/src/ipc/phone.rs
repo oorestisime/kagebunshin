@@ -84,12 +84,14 @@ const CERT_RETRY: Duration = Duration::from_mins(5);
 /// What the browser may do with the page: load and run only what this
 /// listener serves, and talk only to it.
 const POLICY: &str = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; \
-                      connect-src 'self'; manifest-src 'self'; base-uri 'none'; \
+                      connect-src 'self'; manifest-src 'self'; worker-src 'self'; \
+                      base-uri 'none'; \
                       form-action 'none'; frame-ancestors 'none'";
 
 const PAGE: &str = include_str!("phone/page.html");
 const STYLE: &str = include_str!("phone/page.css");
 const SCRIPT: &str = include_str!("phone/page.js");
+const WORKER: &str = include_str!("phone/sw.js");
 const ICON: &[u8] = include_bytes!("phone/icon.png");
 const MANIFEST: &str = r##"{"name":"Kagebunshin","short_name":"Kagebunshin","start_url":"/","scope":"/","display":"standalone","background_color":"#0b0b0d","theme_color":"#0b0b0d","icons":[{"src":"/icon.png","sizes":"180x180","type":"image/png"}]}"##;
 
@@ -404,6 +406,8 @@ struct State<'a> {
     now: u64,
     version: u64,
     paired: bool,
+    /// The daemon tells this phone of a request that waits.
+    notified: bool,
     pairing: Option<u64>,
     prompts: Vec<Waiting>,
     recent: Vec<Answered>,
@@ -433,6 +437,15 @@ struct Seen {
 #[derive(Deserialize)]
 struct Id {
     id: u64,
+}
+
+/// What the phone's browser gave for its notifications, as
+/// [`crate::webpush::Subscription`] takes it.
+#[derive(Deserialize)]
+struct Subscribed {
+    endpoint: String,
+    p256dh: String,
+    auth: String,
 }
 
 /// A passkey just made; both base64url.
@@ -488,6 +501,7 @@ async fn answer(
             "/" => file("text/html; charset=utf-8", PAGE.as_bytes()),
             "/page.css" => file("text/css; charset=utf-8", STYLE.as_bytes()),
             "/page.js" => file("text/javascript; charset=utf-8", SCRIPT.as_bytes()),
+            "/sw.js" => file("text/javascript; charset=utf-8", WORKER.as_bytes()),
             "/icon.png" => file("image/png", ICON),
             "/manifest.webmanifest" => file("application/manifest+json", MANIFEST.as_bytes()),
             _ => refuse(StatusCode::NOT_FOUND, "there is no such page"),
@@ -543,6 +557,7 @@ async fn answer(
                 PhoneError::Locked => StatusCode::SERVICE_UNAVAILABLE,
                 PhoneError::Gone => StatusCode::GONE,
                 PhoneError::NoChallenge => StatusCode::CONFLICT,
+                PhoneError::Push(_) => StatusCode::BAD_REQUEST,
                 PhoneError::Failed(_) => StatusCode::INTERNAL_SERVER_ERROR,
                 PhoneError::NotPaired
                 | PhoneError::NotPairing
@@ -617,6 +632,7 @@ async fn asked(
                     now: unix_now(),
                     version: page.version,
                     paired: page.paired,
+                    notified: page.notified,
                     pairing: page.pairing,
                     prompts,
                     recent: page.recent,
@@ -660,6 +676,15 @@ async fn asked(
         "/deny" => {
             let Id { id } = parsed(body)?;
             daemon.phone_deny(peer, id)?;
+            done()
+        }
+        "/push/key" => {
+            let key = daemon.phone_push_key(&peer.node)?;
+            Ok(json(StatusCode::OK, &serde_json::json!({ "key": key })))
+        }
+        "/push/subscribe" => {
+            let said: Subscribed = parsed(body)?;
+            daemon.phone_push_subscribe(peer, &said.endpoint, &said.p256dh, &said.auth)?;
             done()
         }
         _ => Err(Refusal::Path),
@@ -721,11 +746,13 @@ mod tests {
     use crate::config::schema::DEFAULT_PHONE_PORT;
     use crate::config::{Config, Registry, RemoteId, parse_project};
     use crate::daemon::Providers;
+    use crate::daemon::push::PushState;
     use crate::ipc::protocol::{Facts, Request, Response, WireSecret};
     use crate::store::{Passphrase, STORE_FILE, StoreFile};
     use crate::tailnet::fake::FakeTailnet;
     use crate::types::Provider;
     use crate::webauthn::fake::FakePasskey;
+    use crate::webpush::fake::{FakeBrowser, FakePush};
 
     const PHONE: &str = "100.64.0.9:52000";
     const TABLET: &str = "100.64.0.8:52000";
@@ -785,7 +812,11 @@ remotes = ["git@github.com:acme/widget.git"]
             Arc::new(Providers::new()),
             file,
         )
-        .with_tailnet(tailnet.clone());
+        .with_tailnet(tailnet.clone())
+        .with_push(
+            Arc::new(FakePush::default()),
+            PushState::new(dir.join(crate::daemon::push::FILE)),
+        );
         d.unlock(Some(pass)).await.unwrap();
         let set = d
             .handle(Request::StoreSet {
@@ -1011,6 +1042,11 @@ remotes = ["git@github.com:acme/widget.git"]
             ("/", "text/html; charset=utf-8", "<script src=\"/page.js\""),
             ("/page.css", "text/css; charset=utf-8", "--bg"),
             ("/page.js", "text/javascript; charset=utf-8", "'use strict'"),
+            (
+                "/sw.js",
+                "text/javascript; charset=utf-8",
+                "showNotification",
+            ),
             ("/icon.png", "image/png", "PNG"),
             (
                 "/manifest.webmanifest",
@@ -1122,6 +1158,62 @@ remotes = ["git@github.com:acme/widget.git"]
         let reply = page(&tailnet, &d, "/deny", json!({ "id": id })).await;
         assert_eq!(reply.status, StatusCode::OK);
         assert!(matches!(asked.await.unwrap(), Response::Error(_)));
+    }
+
+    /// The paired phone asks which key to subscribe to and hands over
+    /// what its browser gave for notifications; the page then says it is
+    /// told of requests. Nobody else does either, and what is not a
+    /// browser's is refused.
+    #[tokio::test]
+    async fn the_phone_allows_notifications_over_the_page() {
+        let tmp = tempfile::tempdir().unwrap();
+        let tailnet = tailnet();
+        let d = daemon(tmp.path(), &tailnet).await;
+        paired(&tailnet, &d).await;
+        assert_eq!(state(&tailnet, &d).await["notified"], false);
+
+        let reply = page(&tailnet, &d, "/push/key", json!({})).await;
+        assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+        let key = reply.said()["key"].as_str().unwrap().to_owned();
+        // An uncompressed P-256 point, as `applicationServerKey` takes it.
+        let point = webauthn::decode(&key).unwrap();
+        assert_eq!((point.len(), point[0]), (65, 4));
+        let again = page(&tailnet, &d, "/push/key", json!({})).await.said();
+        assert_eq!(again["key"], key);
+
+        let browser = FakeBrowser::new();
+        let given = |endpoint: &str| json!({ "endpoint": endpoint, "p256dh": browser.p256dh(), "auth": browser.auth() });
+        for (body, why) in [
+            (
+                json!({ "endpoint": browser.endpoint }),
+                "not what the page sends",
+            ),
+            (given("https://push.example.com/one"), "not a push service"),
+            (given("http://web.push.apple.com/one"), "not HTTPS"),
+            (
+                json!({ "endpoint": browser.endpoint, "p256dh": "AAAA", "auth": browser.auth() }),
+                "not a key",
+            ),
+        ] {
+            let reply = page(&tailnet, &d, "/push/subscribe", body).await;
+            assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{why}");
+        }
+        for path in ["/push/key", "/push/subscribe"] {
+            let req = post(path, &given(&browser.endpoint));
+            let reply = send(TABLET, &tailnet, &d, req).await;
+            assert_eq!(reply.status, StatusCode::FORBIDDEN, "{path}");
+        }
+        assert_eq!(state(&tailnet, &d).await["notified"], false);
+
+        let reply = page(&tailnet, &d, "/push/subscribe", given(&browser.endpoint)).await;
+        assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+        assert_eq!(reply.said(), json!({}));
+        assert_eq!(state(&tailnet, &d).await["notified"], true);
+
+        // Locked, the daemon knows of no phone to take them from.
+        d.lock();
+        let reply = page(&tailnet, &d, "/push/key", json!({})).await;
+        assert_eq!(reply.status, StatusCode::FORBIDDEN);
     }
 
     /// The phone pairs over the page with a passkey it makes, is shown a

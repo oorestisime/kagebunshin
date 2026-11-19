@@ -2625,6 +2625,8 @@ mod tests {
                 node: "nPOCKET".into(),
                 paired,
                 seen: None,
+                notifies: false,
+                untold: None,
             }),
             url: Some(PAGE.into()),
             problem: None,

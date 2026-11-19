@@ -4822,13 +4822,13 @@ fn an_unapproved_request_says_what_was_asked() {
     };
     assert_eq!(
         asked(2, &["acme/prod/db"], Some(90)),
-        "environment dev of project widget: nobody answered the app's prompt within 90 seconds, \
+        "environment dev of project widget: nobody answered the request within 90 seconds, \
          so nothing was handed out. It asked for K0, K1, read from aws_sm:acme/prod/db, which \
          is marked sensitive"
     );
     assert_eq!(
         asked(11, &["a", "b"], None),
-        "environment dev of project widget: a person denied the request in the app, so \
+        "environment dev of project widget: a person denied the request, so \
          nothing was handed out. It asked for K0, K1, K2, K3, K4, K5, K6, K7 and 3 more, read \
          from secrets marked sensitive (aws_sm:a, aws_sm:b)"
     );
@@ -4844,7 +4844,7 @@ fn an_unapproved_request_says_what_was_asked() {
     }));
     assert_eq!(
         waiting.to_string(),
-        "environment rc of project widget: nobody answered the app's prompt within a minute, \
+        "environment rc of project widget: nobody answered the request within a minute, \
          so nothing was handed out. It asked for every value of the environment, which looks \
          like production (its name) and waits for a human decision"
     );
@@ -4928,7 +4928,7 @@ async fn sensitive_values_wait_for_approval_in_the_app() {
     assert_eq!(e.code, ErrorCode::NotApproved);
     assert_eq!(
         e.message,
-        "environment prod of project widget: a person denied the request in the app, so \
+        "environment prod of project widget: a person denied the request, so \
          nothing was handed out. It asked for every value of the environment, which is \
          marked sensitive"
     );
@@ -4959,7 +4959,7 @@ async fn sensitive_values_wait_for_approval_in_the_app() {
     assert_eq!(e.code, ErrorCode::NotApproved);
     assert_eq!(
         e.message,
-        "environment prod of project widget: nobody answered the app's prompt within 5 \
+        "environment prod of project widget: nobody answered the request within 5 \
          minutes, so nothing was handed out. It asked for every value of the environment, \
          which is marked sensitive"
     );

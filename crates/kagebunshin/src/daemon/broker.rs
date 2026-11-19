@@ -28,6 +28,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
 
@@ -44,6 +45,7 @@ use crate::secret::SecretValue;
 use crate::source::SourceError;
 
 use super::proof::Proofs;
+use super::push::PushState;
 use super::resolve::{
     EnvValues, ImportRefusal, Refusal, ResolveError, SourceFactory, Unapproved, add_as_one_key,
     duplicate_warnings, env_error, fetch_env, is_sensitive, mark_hint, named_production, prod_like,
@@ -68,6 +70,7 @@ use crate::store::{
 };
 use crate::tailnet::LocalApi;
 use crate::types::{EnvName, KeyName, Origin, ProjectName, Provider};
+use crate::webpush::PushService;
 
 /// What a request that waits for approval asks for.
 struct Wanted {
@@ -1074,6 +1077,8 @@ struct Inner {
     /// Woken when the store turns the remote endpoint on or off.
     remote_changed: tokio::sync::Notify,
     phone: Mutex<phone::Phone>,
+    /// What notifies the paired phone of a request that waits.
+    push: Option<phone::Push>,
     /// Woken when the phones the approval page is for may have changed.
     phone_woken: tokio::sync::Notify,
     /// Bumped whenever what the approval page shows may have changed,
@@ -1131,6 +1136,7 @@ impl Daemon {
                 remote: Mutex::new(Remote::default()),
                 remote_changed: tokio::sync::Notify::new(),
                 phone: Mutex::new(phone::Phone::default()),
+                push: None,
                 phone_woken: tokio::sync::Notify::new(),
                 phone_seq: watch::channel(0).0,
             }),
@@ -1147,6 +1153,20 @@ impl Daemon {
         Arc::get_mut(&mut self.inner)
             .expect("with_tailnet is called before the daemon is cloned")
             .tailnet = Some(api);
+        self
+    }
+
+    /// Tells the paired phone of a request that waits through `service`,
+    /// keeping what that takes in `state`. Call it before cloning the
+    /// daemon.
+    #[expect(
+        clippy::expect_used,
+        reason = "set up once at startup, before any clone; a second owner is a programming error"
+    )]
+    pub fn with_push(mut self, service: Arc<dyn PushService>, state: PushState) -> Self {
+        Arc::get_mut(&mut self.inner)
+            .expect("with_push is called before the daemon is cloned")
+            .push = Some(phone::Push { service, state });
         self
     }
 
@@ -1456,8 +1476,13 @@ impl Daemon {
             }
             Request::PhonePairStop => Ok(self.phone_pair_stop()),
             Request::PhoneUnpair { passphrase } => {
-                self.store_write(passphrase.into_passphrase(), None, Store::unpair_phone)
-                    .await
+                let unpaired = self
+                    .store_write(passphrase.into_passphrase(), None, Store::unpair_phone)
+                    .await;
+                if unpaired.is_ok() {
+                    self.forget_push();
+                }
+                unpaired
             }
             Request::WaitApprovals { known } => Ok(self.wait_approvals(known, caller).await),
             Request::Approve {
@@ -3545,10 +3570,11 @@ impl Daemon {
         }
     }
 
-    /// Waits for a person to approve, in the app, handing the keys `wanted`
-    /// of `env` to `ask`, which would be `refused` otherwise; `secrets`
-    /// are the marked secrets they are read from, if that is why. Refused
-    /// at once if the app is not open, and denied after `approval_timeout`.
+    /// Waits for a person to approve, in the app or on the paired phone,
+    /// handing the keys `wanted` of `env` to `ask`, which would be
+    /// `refused` otherwise; `secrets` are the marked secrets they are read
+    /// from, if that is why. Refused at once if the app is not open and no
+    /// phone is told of it, and denied after `approval_timeout`.
     async fn wait_for_approval(
         &self,
         ask: &Ask<'_>,
@@ -3562,7 +3588,7 @@ impl Daemon {
             shown,
             every_key,
         } = wanted;
-        if !self.inner.approvals().app_open() {
+        if !self.inner.approvals().app_open() && !self.phone_listens() {
             return Err(ResolveError::NoApp(Box::new(refused)));
         }
         // One prompt at a time per remote machine, so one cannot bury the
@@ -3639,7 +3665,7 @@ impl Daemon {
             secrets: secrets.clone(),
             every_key,
         };
-        info!(%project, %env, "waiting for approval in the app");
+        info!(%project, %env, "waiting for approval");
         let decision = match self.ask_app(ask.caller, prompt, wait).await {
             Answer::Approved(_) | Answer::ApprovedOnPhone => Decision::Allowed,
             Answer::Denied => Decision::Denied,
@@ -3665,8 +3691,9 @@ impl Daemon {
         }
     }
 
-    /// Shows `prompt` in the app, which the caller has seen is open, and
-    /// waits for a person's answer, for at most `wait`.
+    /// Shows `prompt` in the app, and tells the paired phone of one it can
+    /// answer; the caller has seen that one of them is there. Waits for a
+    /// person's answer, for at most `wait`.
     async fn ask_app(&self, caller: &Caller, mut prompt: ApprovalPrompt, wait: Duration) -> Answer {
         let (reply, answer) = oneshot::channel();
         let (id, shown) = {
@@ -3683,16 +3710,19 @@ impl Daemon {
             id,
         };
         self.inner.approvals_changed.send_modify(|n| *n += 1);
+        let told = self.tell_phone(&shown, wait);
         // A caller that is killed, as an agent's command is when it runs
         // out of time, leaves nobody to answer to: its prompt goes.
         let gone = caller_gone(caller);
-        // The app closing leaves nobody to answer: the same refusal as if
-        // it had not been open, and not a wait for the timeout.
+        // The app closing leaves nobody to answer, unless the phone was
+        // told: the same refusal as if it had not been open, and not a
+        // wait for the timeout.
         let closed = async {
             let mut tick = tokio::time::interval(CALLER_CHECK);
             loop {
                 tick.tick().await;
-                if !self.inner.approvals().app_open() {
+                let on_phone = told.as_ref().is_some_and(|t| t.load(Ordering::Relaxed));
+                if !on_phone && !self.inner.approvals().app_open() {
                     return;
                 }
             }

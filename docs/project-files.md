@@ -540,7 +540,8 @@ the store passphrase. `run` stays all or nothing: if any key it would inject is
 sensitive, the whole command waits. Denied, not approved within five
 minutes (`approval_timeout` in `config.toml`), or asked while the app is
 not open, it is refused with exit 5; so is one still waiting when the app
-closes. A refusal says how it ended and what was asked for.
+closes. A [paired phone](config.md#the-approval-page) can approve it too,
+and one that is notified keeps it waiting with the app closed. A refusal says how it ended and what was asked for.
 
 
 ### Production-like names wait for a human decision

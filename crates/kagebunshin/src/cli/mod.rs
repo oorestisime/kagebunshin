@@ -2044,6 +2044,14 @@ fn render_phone(out: &mut String, p: &PhoneStatus) {
                 "\nphone: {name} is paired, its page is not served yet"
             )),
         }
+        out.push_str(&match (phone.notifies, &phone.untold) {
+            (true, None) => "\n  notifications: on".to_owned(),
+            (true, Some(why)) => format!("\n  notifications: on, but {why}"),
+            (false, Some(why)) => format!("\n  notifications: off: {why}"),
+            (false, None) => "\n  notifications: off (turn them on on its page, opened from the \
+                              phone's home screen)"
+                .to_owned(),
+        });
         if let Some(last) = &p.last {
             out.push_str(&format!(
                 "\n  last answered there: {} {}/{} at {}",
@@ -2797,19 +2805,51 @@ mod tests {
                 node: "nPHONE".into(),
                 paired: 100,
                 seen: None,
+                notifies: false,
+                untold: None,
             }),
             ..none.clone()
         };
+        const OFF: &str = "\n  notifications: off (turn them on on its page, opened from the \
+                           phone's home screen)";
         assert_eq!(
             said(paired.clone()),
-            "\nphone: phone is paired, its page is not served yet"
+            format!("\nphone: phone is paired, its page is not served yet{OFF}")
         );
         assert_eq!(
             said(PhoneStatus {
                 problem: Some("Tailscale is Stopped, not Running".into()),
                 ..paired.clone()
             }),
-            "\nphone: phone is paired, its page is not served: Tailscale is Stopped, not Running"
+            format!(
+                "\nphone: phone is paired, its page is not served: Tailscale is Stopped, not \
+                 Running{OFF}"
+            )
+        );
+        let notified = |notifies: bool, untold: Option<&str>| {
+            let mut status = PhoneStatus {
+                url: Some("https://self.example.ts.net:47318".into()),
+                ..paired.clone()
+            };
+            if let Some(phone) = &mut status.paired {
+                (phone.notifies, phone.untold) = (notifies, untold.map(Into::into));
+            }
+            said(status)
+        };
+        assert_eq!(
+            notified(true, None),
+            "\nphone: phone approves at https://self.example.ts.net:47318\
+             \n  notifications: on"
+        );
+        assert_eq!(
+            notified(true, Some("the last notification was not sent: no route")),
+            "\nphone: phone approves at https://self.example.ts.net:47318\
+             \n  notifications: on, but the last notification was not sent: no route"
+        );
+        assert_eq!(
+            notified(false, Some("the phone no longer takes them")),
+            "\nphone: phone approves at https://self.example.ts.net:47318\
+             \n  notifications: off: the phone no longer takes them"
         );
         assert_eq!(
             said(PhoneStatus {
@@ -2828,9 +2868,11 @@ mod tests {
                 }),
                 ..paired
             }),
-            "\nphone: phone approves at https://self.example.ts.net:47318\
-             \n  last answered there: denied widget/dev at 1970-01-01 00:02:10Z\
-             \nphone: pairing other, for 9m more"
+            format!(
+                "\nphone: phone approves at https://self.example.ts.net:47318{OFF}\
+                 \n  last answered there: denied widget/dev at 1970-01-01 00:02:10Z\
+                 \nphone: pairing other, for 9m more"
+            )
         );
         assert_eq!(
             said(PhoneStatus {

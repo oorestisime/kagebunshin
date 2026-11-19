@@ -147,7 +147,7 @@ ask the human: open the app (`kagebunshin app`), so a request for values marked 
 -- the app is open and the human does not answer: the run is refused once `approval_timeout` in config.toml is over (3 seconds here, 5 minutes unless set), and says what it asked for
 
 $ kagebunshin --env prod run -- ./test.sh
-kagebunshin: environment prod of project api: nobody answered the app's prompt within 3 seconds, so nothing was handed out. It asked for every value of the environment, which is marked sensitive
+kagebunshin: environment prod of project api: nobody answered the request within 3 seconds, so nothing was handed out. It asked for every value of the environment, which is marked sensitive
 hint: run the command again once the human is at the screen: the app's window shows this command and takes the store's passphrase
 ask the human: approve the request in the app (`kagebunshin app`) when it asks
 [exit 5]
@@ -155,7 +155,7 @@ ask the human: approve the request in the app (`kagebunshin app`) when it asks
 -- the human clicks Deny
 
 $ kagebunshin --env prod run -- ./test.sh
-kagebunshin: environment prod of project api: a person denied the request in the app, so nothing was handed out. It asked for every value of the environment, which is marked sensitive
+kagebunshin: environment prod of project api: a person denied the request, so nothing was handed out. It asked for every value of the environment, which is marked sensitive
 hint: a person refused this: ask them before running it again
 [exit 5]
 

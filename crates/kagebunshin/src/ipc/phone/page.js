@@ -1,6 +1,10 @@
 // The approval page of a paired phone. It shows what the daemon says is
 // waiting, and answers with the phone's passkey. Nothing here is trusted
 // by the daemon: it checks the passkey's signature itself.
+//
+// Its service worker (sw.js) shows the notification the daemon sends when
+// a request starts waiting. An iPhone lets a page be notified only once
+// it is on the home screen and opened from there.
 'use strict';
 
 const $ = (id) => document.getElementById(id);
@@ -16,7 +20,18 @@ const icon = {
   cross: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>',
   calm: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5.500c0 4.200-2.900 7.600-7 9.500-4.100-1.900-7-5.300-7-9.500V6z"/><path d="M9 12l2.200 2.200L15.200 10"/></svg>',
   away: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H4zM9 20h6M12 16v4M9.500 8.500l5 5M14.500 8.500l-5 5"/></svg>',
+  share: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3M8 7l4-4 4 4M6 11H5a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-8a1 1 0 0 0-1-1h-1"/></svg>',
+  bell: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 10a6 6 0 0 1 12 0c0 5 2 6 2 7H4c0-1 2-2 2-7M10 20a2 2 0 0 0 4 0"/></svg>',
 };
+
+// Whether this was opened from the home screen, and whether the browser
+// lets it be notified here.
+const standalone = navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
+const pushes = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+// The request a tapped notification was for, until it has been shown.
+let wanted = Number(new URLSearchParams(location.search).get('req')) || null;
+if (location.search) history.replaceState(null, '', '/');
 
 // A refusal, in the daemon's words where it gave any.
 class Refused extends Error {
@@ -141,15 +156,80 @@ function pair() {
   };
 }
 
+// Has this phone told of each request that waits: `ask` asks the person
+// to allow notifications first, which only a tap may do.
+async function notify(ask) {
+  if (ask && await Notification.requestPermission() !== 'granted') {
+    throw new Error('Notifications were not allowed. Allow them for Kagebunshin in this phone\u2019s settings.');
+  }
+  const worker = await navigator.serviceWorker.ready;
+  const { key } = await post('/push/key');
+  // What the browser gave for another key is of no use with this one.
+  let held = await worker.pushManager.getSubscription();
+  if (held && (!held.options.applicationServerKey || b64(held.options.applicationServerKey) !== key)) {
+    await held.unsubscribe();
+    held = null;
+  }
+  if (!held) held = await worker.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: bytes(key) });
+  const said = held.toJSON();
+  await post('/push/subscribe', { endpoint: said.endpoint, p256dh: said.keys.p256dh, auth: said.keys.auth });
+}
+
+// What stands between this phone and being notified, if anything does.
+function notices() {
+  if (state.notified) return '';
+  const card = (mark, title, text, button) => `<div class="card notice"><div class="row">${mark}
+    <div class="grow"><div class="t">${title}</div><div class="s">${text}</div></div>${button || ''}</div></div>`;
+  if (!pushes) {
+    return standalone ? '' : card(icon.share, 'Add to Home Screen',
+      'To be told here when a command asks: in Safari, tap Share, then Add to Home Screen, and open Kagebunshin from there.');
+  }
+  if (Notification.permission === 'denied') {
+    return card(icon.bell, 'Notifications are off', 'Allow them for Kagebunshin in this phone\u2019s settings to be told here when a command asks.');
+  }
+  return `${card(icon.bell, 'Notifications', 'Be told here when a command asks, wherever you are.', '<button class="small" id="notify">Turn on</button>')}
+    <div class="err spaced" id="err"></div>`;
+}
+
+// Takes down the notifications of requests that no longer wait.
+async function tidy() {
+  try {
+    const worker = await navigator.serviceWorker.getRegistration();
+    for (const shown of await worker.getNotifications()) {
+      const id = shown.data && shown.data.id;
+      if (!state.prompts.some((p) => p.id === id)) shown.close();
+    }
+  } catch { /* a browser that does not list them keeps them */ }
+}
+
 function idle() {
   const rows = state.recent.map((r) => `<div class="row"><span class="dot ${r.outcome === 'approved' ? '' : r.outcome === 'denied' ? 'no' : 'none'}"></span>
     <div class="grow"><div class="t">${esc(r.project)}/${esc(r.env)}</div><div class="s mono">${esc(r.command)}</div></div>
     <div class="s right">${esc((outcomes[r.outcome] || r.outcome).toLowerCase())}<br>${ago(Math.max(state.now - r.time, 0))}${r.by ? ` · ${r.by === 'phone' ? 'phone' : 'desk'}` : ''}</div></div>`).join('');
-  show('idle', `<div class="scroll column">
+  show('idle', `<div class="scroll column">${notices()}
     <div class="center top"><div class="ring">${icon.calm}</div>
       <h1>Nothing is waiting</h1>
       <p class="dim">A command that asks for sensitive values on <span class="strong">${esc(state.machine)}</span> shows up here.</p></div>
     ${rows ? `<div class="label">Recent</div><div class="card flush">${rows}</div>` : ''}</div>`);
+  const on = $('notify');
+  if (!on) return;
+  on.onclick = async () => {
+    on.disabled = true;
+    $('err').textContent = '';
+    busy = true;
+    try {
+      await notify(true);
+      busy = false;
+      state = await post('/state');
+      shown = '';
+      route();
+    } catch (e) {
+      busy = false;
+      if (shown !== 'idle') return route();
+      if ($('err')) $('err').textContent = e.message;
+      if ($('notify')) $('notify').disabled = false;
+    }
+  };
 }
 
 // One waiting request, in the words the app on the computer uses.
@@ -184,6 +264,7 @@ function request(p, more) {
     try {
       await work();
       busy = false;
+      if (wanted === p.id) wanted = null;
       result({ ...p, command: w.command, outcome, by: 'phone' });
     } catch (e) {
       busy = false;
@@ -242,7 +323,22 @@ function route() {
   if (busy || shown === 'result') return;
   if (state.pairing !== null) { if (shown !== 'pair') pair(); return; }
   if (!state.paired) return unpaired();
-  const next = state.prompts[0];
+  tidy();
+  // Allowed before, but what that gave is not kept there: after pairing
+  // again, say. Given again, once, without asking.
+  if (pushes && !state.notified && !notify.again && Notification.permission === 'granted') {
+    notify.again = true;
+    notify(false).catch(() => {});
+  }
+  // A notification's request comes first; one that no longer waits is
+  // shown as it ended.
+  const asked = wanted && state.prompts.find((p) => p.id === wanted);
+  if (wanted && !asked) {
+    const r = state.recent.find((x) => x.id === wanted);
+    wanted = null;
+    if (r) return result(r);
+  }
+  const next = asked || state.prompts[0];
   if (next) {
     if (shown !== `request:${next.id}`) request(next, state.prompts.length - 1);
     return;
@@ -253,7 +349,7 @@ function route() {
     if (r) return result(r);
   }
   idle.listed = idle.listed || '';
-  const listed = JSON.stringify(state.recent.map((r) => [r.id, r.outcome]));
+  const listed = JSON.stringify([state.notified, pushes && Notification.permission, state.recent.map((r) => [r.id, r.outcome])]);
   if (shown !== 'idle' || idle.listed !== listed) { idle.listed = listed; idle(); }
 }
 

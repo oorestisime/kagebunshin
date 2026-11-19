@@ -34,6 +34,7 @@ impl World {
             "home/.local/state/kagebunshin/audit.jsonl",
             "home/.local/state/kagebunshin/runs.jsonl",
             "home/.local/state/kagebunshin/proofs.json",
+            "home/.local/state/kagebunshin/push.json",
             "home/.local/state/kagebunshin/imported.json",
             "home/.local/state/kagebunshin/left-out.json",
             "home/.local/share/kagebunshin/proton/local.key",

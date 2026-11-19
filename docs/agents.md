@@ -10,7 +10,7 @@ The agent runs `kagebunshin run -- <cmd>` whenever a command needs
 secrets. Each `run` gets only the values that command needs (the keys
 `.env.example` lists). Every caller gets the same policy, agent or not:
 a command that needs values marked sensitive waits until you approve it in
-the app with the store passphrase (it is refused if the app is not running; in the tray counts as running),
+the app with the store passphrase, or on your paired phone (it is refused if the app is not running and no phone is notified; in the tray counts as running),
 and what only you may do asks for the store passphrase. Approving a command
 trusts it: a script can print what it was given. Refusals and approvals are
 recorded in the audit log.

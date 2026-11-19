@@ -101,7 +101,10 @@ What needs you is decided by explicit marks, see
   the store passphrase. Denied, not approved within `approval_timeout`
   (five minutes unless `config.toml` sets it, at most thirty), or asked
   while the app is not running, the request is refused; so is one still
-  waiting when the app ends or its window is closed on it.
+  waiting when the app ends or its window is closed on it. A
+  [paired phone](#the-paired-phone) that allowed notifications is told
+  of the request too, and it then waits for the phone with the app
+  closed.
   An app that sits in the tray is running: the request waits in its
   window, which you open. The notification it sends names the program, the project and
   the environment, never the program's arguments or a key.
@@ -355,6 +358,15 @@ person is there, so this is what it rests on:
   the audit log with the phone and its user as Tailscale names them. An
   approval counts only once it is recorded. A signature that does not
   hold is recorded as a denied `phone approve`.
+- **Notifications.** A phone that allowed them is told of a request it
+  can approve through its browser's push service. A notification
+  approves nothing and answers nothing: it opens the page, which shows
+  what the daemon says is waiting, and an approval is still the
+  passkey's signature. The message is encrypted to the phone and signed
+  with a key of this machine's that the phone subscribed to. The address
+  to send to is the one thing the phone chooses and this machine then
+  connects to, so only Apple's, Google's, Mozilla's and Microsoft's push
+  services are taken, over HTTPS.
 - **The browser.** A request must name the page's address as its `Host`,
   one that changes anything must come from the page itself (`Origin`,
   exactly), and no reply allows cross-origin reads, so another site open
@@ -393,11 +405,27 @@ What it does not cover:
   key names, the command line and who asks, for what waits and for the
   last ten answers. Anyone holding the unlocked phone on your tailnet
   reads them.
+- A notification shows on the phone's lock screen what the page's title
+  says and the program's name: project, environment, and for a remote
+  request the machine. The push service cannot read it, but learns that
+  this machine sent that phone a message, when, and how long it was.
+- What notifying takes is outside the store, in `push.json`, for this
+  user alone to read: the phone gives it when nobody is there to type
+  the passphrase. A local process running as you can read it and send
+  that phone notifications in this machine's name, or rewrite it so that
+  this machine's go elsewhere or nowhere. It gains no approval by
+  either. With notifications on, a request waits for the phone while the
+  app is closed, for `approval_timeout` at most, where it was refused at
+  once before.
+- Any app on the paired phone that reaches the page reads what it shows
+  and can deny a request or change where notifications go, as the phone;
+  it cannot approve without the passkey.
 - Tailscale's HTTPS puts this machine's tailnet name in the public
   certificate logs.
 - This build of the page has run only in tests and a desktop browser
-  with a software passkey. An earlier prototype of the same design
-  approved requests from a real iPhone.
+  with a software passkey, where a notification sent through Google's
+  push service arrived. An earlier prototype of the same design approved
+  requests from a real iPhone and notified it through Apple's.
 
 ## Known limitations
 

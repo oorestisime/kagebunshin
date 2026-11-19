@@ -13,6 +13,8 @@ $XDG_STATE_HOME/kagebunshin, else ~/.local/state/kagebunshin
 ├── audit.jsonl          the audit log, mode 0600, rotated to audit.jsonl.1 at 10 MiB
 ├── runs.jsonl           the runs that needed no approval, kept the same way
 ├── proofs.json          the last `run --strict` that worked, per environment
+├── push.json            what notifies the paired phone: this machine's key for
+│                        notifications and what the phone's browser gave for them
 ├── imported.json        the env files `onboard` imported and left in place:
 │                        path, size and time, so they are not named again
 └── left-out.json        the app folders `onboard --exclude` left out, so
@@ -243,12 +245,17 @@ It needs:
 Pair the phone in the app, under Phone: pick it among the tailnet's
 phones and tablets, give the passphrase, and point the phone's camera at
 the code the app shows. The page there makes the passkey, its approval
-key. On an iPhone, open the page in Safari and add it to the home screen
-to keep it at hand.
+key.
+
+To be told of a request, turn notifications on on the page. An iPhone
+allows that only for a page on its home screen: open the page in Safari,
+choose Share, then Add to Home Screen, open Kagebunshin from there and
+tap Turn on. Other phones ask in the browser.
 
 ```sh
 kagebunshin status
 # phone: pocket approves at https://desk.example.ts.net:47318
+#   notifications: on
 #   last answered there: approved widget/dev at 2026-11-19 14:54:20Z
 ```
 
@@ -275,9 +282,26 @@ kagebunshin status
   agent asks you to type, removing a mark and the grants stay at this
   computer, with the passphrase; the page shows an import or a request to
   type values as waiting at the computer, and can deny it.
-- A request still waits only while the app runs on this computer, and
-  the phone is not notified: open the page to see what waits. Both are
-  next.
+- A phone that allowed notifications is told of each request it can
+  approve as the request starts waiting, and tapping the notification
+  opens the page on that request. With notifications on, such a request
+  waits for the phone even when the app is not running on this computer.
+  If the notification cannot be handed over and the app is not open, the
+  request is refused as before, and `status` and the app say why the
+  last one did not go out. A request that takes the passphrase still
+  needs the app.
+- A notification names what the page's title does, the project and
+  environment and for another machine's request that machine, and the
+  program that asks, not its arguments. It goes through the push service
+  of the phone's browser (Apple's for an iPhone), encrypted to the
+  phone: the service learns that this machine sent that phone something,
+  and when. The daemon sends only to the push services of Apple, Google,
+  Mozilla and Microsoft.
+- What notifying takes is in `push.json` in the state directory, not in
+  the store, because the phone gives it after pairing, with nobody at
+  this computer to type the passphrase: this machine's key for
+  notifications and the address and key the phone's browser gave.
+  Removing the phone or pairing one again drops what the phone gave.
 - Each answer given on the phone is in the audit log (`phone approve`,
   `phone deny`), with the phone and its user as Tailscale names them, and
   so is each pairing.
