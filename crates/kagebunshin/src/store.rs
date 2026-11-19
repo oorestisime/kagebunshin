@@ -18,7 +18,19 @@
 //! [_remote]
 //! enabled = true
 //! grants = [{ machine = "buildbox", node = "nAbC123", project = "widget", envs = ["dev"], token = "9f86…", expires = 1767225600 }]
+//!
+//! [_phone]
+//! name = "phone"
+//! node = "nDeF456"
+//! credential = "q83v…"
+//! key = "BHk1…"
+//! paired = 1767225600
 //! ```
+//!
+//! `[_phone]` holds the phone that may approve requests on the approval
+//! page: its name and stable node id on the tailnet, and the id and public
+//! key of the passkey it made when it was paired. There is no secret in
+//! it; it is in the store so that changing it takes the passphrase.
 //!
 //! `[_remote]` holds the remote endpoint: whether it is on, and which
 //! machines on the tailnet may use which environments, each by the stable
@@ -185,6 +197,8 @@ pub enum StoreError {
         machine: String,
         project: Option<ProjectName>,
     },
+    #[error("no phone is paired")]
+    NoPhone,
     #[error("{}: {message}", path.display())]
     Io { path: PathBuf, message: String },
 }
@@ -232,6 +246,28 @@ pub struct Store {
     remote_enabled: bool,
     /// Who may use it, at most one per machine and project.
     grants: Vec<RemoteGrant>,
+    /// The phone that may approve requests, if one is paired.
+    phone: Option<PairedPhone>,
+}
+
+/// The phone that may approve requests on the approval page: a machine on
+/// the tailnet and the passkey it made when it was paired.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PairedPhone {
+    /// Its name on the tailnet when it was paired: the first label of its
+    /// `MagicDNS` name.
+    pub name: String,
+    /// The stable node id tailscaled gave it. The page is served to this
+    /// node and no other, whatever it is called now.
+    pub node: String,
+    /// The id of its passkey, base64url without padding.
+    pub credential: String,
+    /// The passkey's public key, an uncompressed P-256 point, base64url
+    /// without padding. An approval is a signature this key verifies.
+    pub key: String,
+    /// When it was paired, in Unix seconds.
+    pub paired: u64,
 }
 
 /// A machine on the tailnet that may use some of a project's environments
@@ -604,6 +640,27 @@ impl Store {
         Ok(Change::Removed)
     }
 
+    /// The paired phone, if any.
+    pub fn phone(&self) -> Option<&PairedPhone> {
+        self.phone.as_ref()
+    }
+
+    /// Pairs `phone`, replacing the one paired before: there is one.
+    pub fn pair_phone(&mut self, phone: PairedPhone) -> Change {
+        match self.phone.replace(phone) {
+            Some(_) => Change::Replaced,
+            None => Change::Added,
+        }
+    }
+
+    /// Removes the paired phone.
+    pub fn unpair_phone(&mut self) -> Result<Change, StoreError> {
+        match self.phone.take() {
+            Some(_) => Ok(Change::Removed),
+            None => Err(StoreError::NoPhone),
+        }
+    }
+
     /// The secrets marked sensitive, in order.
     pub fn marked_secrets(&self) -> impl Iterator<Item = &Origin> {
         self.secrets.iter()
@@ -738,6 +795,7 @@ impl Store {
             }),
             remote_enabled: raw.remote.as_ref().is_some_and(|r| r.enabled),
             grants: raw.remote.map(|r| r.grants).unwrap_or_default(),
+            phone: raw.phone,
         })
     }
 
@@ -788,7 +846,10 @@ impl Store {
                         + g.envs.iter().map(|e| e.as_str().len() + 4).sum::<usize>()
                         + 100
                 })
-                .sum::<usize>();
+                .sum::<usize>()
+            + self.phone.as_ref().map_or(0, |p| {
+                6 * (p.name.len() + p.node.len() + p.credential.len() + p.key.len()) + 100
+            });
         let mut out = Zeroizing::new(String::with_capacity(HEADER.len() + marks + worst));
         out.push_str(HEADER);
         if !self.envs.is_empty()
@@ -880,6 +941,21 @@ impl Store {
             }
             out.push_str("]\n");
         }
+        // Only when paired, for the same reason.
+        if let Some(p) = &self.phone {
+            for (name, value) in [
+                ("\n[_phone]\nname", &p.name),
+                ("node", &p.node),
+                ("credential", &p.credential),
+                ("key", &p.key),
+            ] {
+                out.push_str(name);
+                out.push_str(" = \"");
+                escape_into(&mut out, value);
+                out.push_str("\"\n");
+            }
+            out.push_str(&format!("paired = {}\n", p.paired));
+        }
         for (section, keys) in &self.sections {
             out.push_str(&format!("\n[{section}]\n"));
             for (key, value) in keys {
@@ -914,12 +990,13 @@ fn escape_into(out: &mut String, s: &str) {
     }
 }
 
-/// The decrypted file: `[_marks]`, `[_proton]`, `[_remote]`, then one
-/// table per project.
+/// The decrypted file: `[_marks]`, `[_proton]`, `[_remote]`, `[_phone]`,
+/// then one table per project.
 struct Raw {
     marks: RawMarks,
     proton: Option<RawProton>,
     remote: Option<RawRemote>,
+    phone: Option<PairedPhone>,
     sections: BTreeMap<ProjectName, BTreeMap<EnvName, BTreeMap<KeyName, Value>>>,
 }
 
@@ -967,6 +1044,7 @@ impl<'de> Deserialize<'de> for Raw {
                     marks: RawMarks::default(),
                     proton: None,
                     remote: None,
+                    phone: None,
                     sections: BTreeMap::new(),
                 };
                 let mut marks = false;
@@ -990,6 +1068,13 @@ impl<'de> Deserialize<'de> for Raw {
                             return Err(de::Error::custom("[_remote] appears twice"));
                         }
                         raw.remote = Some(map.next_value()?);
+                        continue;
+                    }
+                    if name == "_phone" {
+                        if raw.phone.is_some() {
+                            return Err(de::Error::custom("[_phone] appears twice"));
+                        }
+                        raw.phone = Some(map.next_value()?);
                         continue;
                     }
                     let project: ProjectName = name.parse().map_err(de::Error::custom)?;
@@ -1461,6 +1546,43 @@ mod tests {
             .update(&pass("pw"), None, |st| st.revoke_remote("box-n2", None))
             .unwrap_err();
         assert!(matches!(err, StoreError::NoGrant { .. }));
+    }
+
+    /// One phone is paired at a time; pairing another replaces it, and a
+    /// store with none has no `[_phone]` table.
+    #[test]
+    fn a_paired_phone_round_trips_and_is_replaced() {
+        let (_d, f) = setup();
+        f.create(&pass("pw")).unwrap();
+        assert_eq!(f.open(&pass("pw")).unwrap().phone(), None);
+        let phone = |node: &str| PairedPhone {
+            name: format!("phone \"{node}\""),
+            node: node.into(),
+            credential: "q83vEjRWeJA".into(),
+            key: "BHk1".into(),
+            paired: 1_767_225_600,
+        };
+        let (change, _) = f
+            .update(&pass("pw"), None, |st| Ok(st.pair_phone(phone("n1"))))
+            .unwrap();
+        assert_eq!(change, Change::Added);
+        assert_eq!(f.open(&pass("pw")).unwrap().phone(), Some(&phone("n1")));
+        let (change, st) = f
+            .update(&pass("pw"), None, |st| Ok(st.pair_phone(phone("n2"))))
+            .unwrap();
+        assert_eq!(change, Change::Replaced);
+        assert_eq!(st.phone(), Some(&phone("n2")));
+        let names: Vec<String> = st.sections().map(|(s, _)| s.to_string()).collect();
+        assert!(names.is_empty(), "[_phone] is not a section");
+
+        let (change, st) = f.update(&pass("pw"), None, Store::unpair_phone).unwrap();
+        assert_eq!(change, Change::Removed);
+        assert_eq!(st.phone(), None);
+        assert!(!st.render().contains("_phone"));
+        let err = f
+            .update(&pass("pw"), None, Store::unpair_phone)
+            .unwrap_err();
+        assert!(matches!(err, StoreError::NoPhone));
     }
 
     /// The store keeps a token's hash, never the token: the file's text has

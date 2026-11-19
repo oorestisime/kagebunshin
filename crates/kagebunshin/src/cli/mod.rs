@@ -48,8 +48,8 @@ use crate::daemon;
 use crate::ipc::client::{Client, ClientError, DEFAULT_TIMEOUT};
 use crate::ipc::paths;
 use crate::ipc::protocol::{
-    BUILD_ID, DiffReport, ErrorCode, Facts, Fix, MarkTarget, Request, Response, StatusReport,
-    StoreListing, SyncReport, Who, WireSecret,
+    BUILD_ID, DiffReport, ErrorCode, Facts, Fix, MarkTarget, PhoneStatus, Request, Response,
+    StatusReport, StoreListing, SyncReport, Who, WireSecret,
 };
 use crate::repo;
 use crate::repo::env_example::ExampleValues;
@@ -2030,6 +2030,42 @@ providers:",
     out.push_str(&table(&rows));
 }
 
+/// What `status` says about the phone that approves requests and the
+/// page it does that on.
+fn render_phone(out: &mut String, p: &PhoneStatus) {
+    if let Some(phone) = &p.paired {
+        let name = &phone.name;
+        match (&p.url, &p.problem) {
+            (Some(url), _) => out.push_str(&format!("\nphone: {name} approves at {url}")),
+            (None, Some(why)) => out.push_str(&format!(
+                "\nphone: {name} is paired, its page is not served: {why}"
+            )),
+            (None, None) => out.push_str(&format!(
+                "\nphone: {name} is paired, its page is not served yet"
+            )),
+        }
+        if let Some(last) = &p.last {
+            out.push_str(&format!(
+                "\n  last answered there: {} {}/{} at {}",
+                if last.approved { "approved" } else { "denied" },
+                last.project,
+                last.env,
+                crate::audit::utc(last.time)
+            ));
+        }
+    }
+    if let Some(pairing) = &p.pairing {
+        out.push_str(&format!(
+            "\nphone: pairing {}, for {} more",
+            pairing.name,
+            match pairing.left {
+                s if s < 60 => format!("{s}s"),
+                s => format!("{}m", s / 60),
+            }
+        ));
+    }
+}
+
 fn render_status(
     r: &StatusReport,
     providers: &[ProviderStatus],
@@ -2044,6 +2080,9 @@ fn render_status(
     render_providers(&mut out, providers);
     if let Some(remote) = &r.remote {
         remote::render(&mut out, remote, now);
+    }
+    if let Some(phone) = &r.phone {
+        render_phone(&mut out, phone);
     }
     let Some(env) = &r.env else {
         if let Some(runs) = runs {
@@ -2525,6 +2564,7 @@ mod tests {
             acknowledged: Vec::new(),
             shared: Vec::new(),
             app: false,
+            phone: None,
         };
         let text = render_status(&status, &[], &[], None);
         assert!(!text.contains("shared with"), "{text}");
@@ -2652,6 +2692,7 @@ mod tests {
             acknowledged: Vec::new(),
             shared: Vec::new(),
             app: false,
+            phone: None,
         };
         let text = render_status(&status, &[], &[], None);
         assert!(
@@ -2719,6 +2760,7 @@ mod tests {
             acknowledged: Vec::new(),
             shared: Vec::new(),
             app: false,
+            phone: None,
         };
         let text = render_status(&status, &[], &[], None);
         let rows: Vec<&str> = text
@@ -2731,6 +2773,75 @@ mod tests {
             "{text}"
         );
         assert!(rows[2].ends_with("project file  = 3000"), "{text}");
+    }
+
+    #[test]
+    fn status_names_the_paired_phone_and_its_page() {
+        use crate::ipc::protocol::{PhoneAnswer, PhonePairingView, PhoneView};
+        let said = |p: PhoneStatus| {
+            let mut out = String::new();
+            render_phone(&mut out, &p);
+            out
+        };
+        let none = PhoneStatus {
+            paired: None,
+            url: None,
+            problem: None,
+            pairing: None,
+            last: None,
+        };
+        assert_eq!(said(none.clone()), "");
+        let paired = PhoneStatus {
+            paired: Some(PhoneView {
+                name: "phone".into(),
+                node: "nPHONE".into(),
+                paired: 100,
+                seen: None,
+            }),
+            ..none.clone()
+        };
+        assert_eq!(
+            said(paired.clone()),
+            "\nphone: phone is paired, its page is not served yet"
+        );
+        assert_eq!(
+            said(PhoneStatus {
+                problem: Some("Tailscale is Stopped, not Running".into()),
+                ..paired.clone()
+            }),
+            "\nphone: phone is paired, its page is not served: Tailscale is Stopped, not Running"
+        );
+        assert_eq!(
+            said(PhoneStatus {
+                url: Some("https://self.example.ts.net:47318".into()),
+                last: Some(PhoneAnswer {
+                    id: 4,
+                    project: "widget".parse().unwrap(),
+                    env: "dev".parse().unwrap(),
+                    approved: false,
+                    time: 130,
+                }),
+                // Another phone is being paired in its place.
+                pairing: Some(PhonePairingView {
+                    name: "other".into(),
+                    left: 599,
+                }),
+                ..paired
+            }),
+            "\nphone: phone approves at https://self.example.ts.net:47318\
+             \n  last answered there: denied widget/dev at 1970-01-01 00:02:10Z\
+             \nphone: pairing other, for 9m more"
+        );
+        assert_eq!(
+            said(PhoneStatus {
+                pairing: Some(PhonePairingView {
+                    name: "phone".into(),
+                    left: 42,
+                }),
+                ..none
+            }),
+            "\nphone: pairing phone, for 42s more"
+        );
     }
 
     #[test]

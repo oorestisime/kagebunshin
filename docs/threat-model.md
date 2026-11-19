@@ -19,7 +19,7 @@ user as the local agents it serves.
   endpoint](config.md#the-remote-endpoint) has none of your credentials
   and cannot edit your config or store. It gets what its machine's grant
   allows, through `run`, `status` and `diff` only, and a marked value only
-  once you approve it here.
+  once you approve it, here or on your paired phone.
 
 ## What it protects, and from whom
 
@@ -34,7 +34,8 @@ Against that agent kagebunshin:
 - keeps values out of files (no `.env`), out of the agent's own
   environment, and out of `status`, `diff`, `audit`, errors and logs;
 - hands out a marked environment, secret or key only once you approve
-  that one request in the app, with the store passphrase;
+  that one request: in the app, with the store passphrase, or on the
+  [phone you paired](#the-paired-phone), with its passkey;
 - keeps human-only actions (`get`, `unlock`, store writes) behind the
   store passphrase;
 - masks values in the piped output of `run`, so a stray `printenv` in a
@@ -166,7 +167,7 @@ request:
 | removing a mark, acknowledging an environment | the passphrase |
 | get | the passphrase |
 | inspect, reveal (the app) | the passphrase |
-| a value marked sensitive, to get or run | approval in the app, with the passphrase |
+| a value marked sensitive, to get or run | approval in the app, with the passphrase, or on the paired phone, with its passkey |
 | status, diff of an environment marked sensitive | refused |
 
 `status` and `diff` may name a `store set` command for keys no source
@@ -321,6 +322,82 @@ What it does not cover:
 - Only IPv4 tailnet addresses are used. The endpoint ran between two
   Linux machines on a real tailnet before it moved to HTTP, and only in
   tests since; it has not been tested on macOS.
+
+## The paired phone
+
+A phone can approve a hand-out of marked values in place of the
+passphrase typed in the app; see
+[config.md](config.md#the-approval-page). That is a second way to show a
+person is there, so this is what it rests on:
+
+- **Which device.** The daemon serves the approval page on this
+  machine's tailnet address only, and asks the local tailscaled who each
+  connection is, on every request. Only the paired phone's node, and
+  while a pairing lasts the node being paired, gets anything, the page
+  itself included. A locked daemon serves nothing.
+- **Which key.** Pairing starts on this machine with the passphrase and
+  names one phone. For ten minutes that phone may make a passkey on the
+  page; its public key and the phone's node id are then written to the
+  store. Changing either takes the passphrase, like a grant.
+- **Which request.** To approve, the page asks the daemon for a
+  challenge: 32 random bytes made for one waiting request, good for two
+  minutes and used once, spent even when the signature is wrong. The
+  phone signs it with the passkey, and the daemon checks the signature
+  with the paired key, and that what was signed names this challenge,
+  the page's exact address (name and port) and a person verified by the
+  phone. Nothing else the page sends is trusted.
+- **What it approves.** Hand-outs only: a `run` or `get` of marked
+  values. What writes the store or loosens anything (unlocking, imports,
+  typed values, removing a mark, grants) takes the passphrase at this
+  computer, and the phone has none. The paired phone can deny any
+  request, with no proof, as closing the app's window does.
+- **What is recorded.** Each answer from the phone and each pairing is in
+  the audit log with the phone and its user as Tailscale names them. An
+  approval counts only once it is recorded. A signature that does not
+  hold is recorded as a denied `phone approve`.
+- **The browser.** A request must name the page's address as its `Host`,
+  one that changes anything must come from the page itself (`Origin`,
+  exactly), and no reply allows cross-origin reads, so another site open
+  on the phone cannot use the page. The page loads and runs only what
+  the daemon serves it.
+
+What it does not cover:
+
+- An approval on the phone takes no passphrase. Whoever holds the phone
+  and can pass its check, your face, a fingerprint or the phone's code,
+  approves hand-outs while the daemon is unlocked. They cannot unlock it,
+  and they get no value: the values go to the command on this machine.
+- What "verified" means is the phone's word. The passkey is made with no
+  attestation, so the daemon does not know what holds it: the phone's own
+  passwords app asks for your face each time, and a password manager that
+  holds passkeys decides for itself what it asks. Check that yours asks.
+- A passkey that syncs is on your other devices too, and with whoever
+  holds that account. It is refused from any device but the paired one,
+  which Tailscale vouches for; someone with both a copy of the passkey
+  and control of your tailnet is the phone as far as the daemon can tell.
+  The signature counter is not checked: a synced passkey does not count.
+- The page's HTTPS shows nothing about who serves it. The certificate is
+  tailscaled's, which gives it and its key to any process of a user it
+  trusts, so a local agent running as you may have them. A page it serves
+  under this machine's name on another port gets signatures that name
+  that address, which the daemon refuses, and it cannot reach the real
+  page as the phone: the daemon sees this machine asking. It can take
+  the page's port before the daemon does, which `status` and the app
+  say, or move `[phone] port`, and the phone then finds no page where it
+  was.
+- While a pairing lasts, the daemon keeps the passphrase in memory to
+  write the store once the phone has made its key: for at most ten
+  minutes, less when the app's Phone view is left, the pairing is stopped
+  or the daemon locks.
+- The page shows the phone what the app shows: project, environment and
+  key names, the command line and who asks, for what waits and for the
+  last ten answers. Anyone holding the unlocked phone on your tailnet
+  reads them.
+- Tailscale's HTTPS puts this machine's tailnet name in the public
+  certificate logs.
+- This build of the page has run only in tests and a desktop browser
+  with a software passkey. An earlier prototype of the same design
+  approved requests from a real iPhone.
 
 ## Known limitations
 

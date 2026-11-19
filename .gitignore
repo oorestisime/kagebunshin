@@ -7,6 +7,9 @@
 
 # Key material.
 *.pem
+# But this one: a key and certificate for a made-up name, which only the
+# approval page's tests serve with.
+!/crates/kagebunshin/src/ipc/phone/test-cert.pem
 *.key
 *.age
 

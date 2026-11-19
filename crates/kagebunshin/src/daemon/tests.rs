@@ -238,6 +238,7 @@ async fn starts_locked_and_refuses_values() {
             acknowledged: Vec::new(),
             shared: Vec::new(),
             app: false,
+            phone: None,
         }
     );
     assert_eq!(
@@ -4933,7 +4934,7 @@ async fn sensitive_values_wait_for_approval_in_the_app() {
     );
     assert_eq!(
         e.hint.as_deref(),
-        Some("a person refused this in the app: ask them before running it again")
+        Some("a person refused this: ask them before running it again")
     );
 
     // Not answered in time, with the app open all the while as it keeps
@@ -7402,3 +7403,5 @@ async fn values_nobody_types_are_not_set() {
         ]
     );
 }
+
+mod phone;

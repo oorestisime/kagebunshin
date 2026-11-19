@@ -38,6 +38,8 @@ use tokio::task::AbortHandle;
 use tokio::time::Instant;
 use tracing::{debug, info, warn};
 
+pub mod phone;
+
 use crate::secret::SecretValue;
 use crate::source::SourceError;
 
@@ -356,8 +358,8 @@ const CALLER_CHECK: Duration = Duration::from_millis(500);
 struct Approvals {
     next: u64,
     /// By id, oldest first, each with when it is denied unanswered and
-    /// where its answer goes: what approved it, or none for a denial.
-    pending: BTreeMap<u64, (ApprovalPrompt, Instant, oneshot::Sender<Option<Approved>>)>,
+    /// where its answer goes.
+    pending: BTreeMap<u64, (ApprovalPrompt, Instant, oneshot::Sender<Reply>)>,
     /// `wait_approvals` requests waiting now, and when the last one ended.
     watching: usize,
     last_seen: Option<Instant>,
@@ -463,9 +465,20 @@ struct Approved {
     values: Vec<(KeyName, SecretValue)>,
 }
 
+/// A person's answer to a prompt, by where they gave it.
+enum Reply {
+    /// In the app: what approved it, or none for a denial.
+    Desk(Option<Approved>),
+    /// On the paired phone: approved with its passkey, or denied. Only a
+    /// prompt that hands values out is approved there.
+    Phone(bool),
+}
+
 /// How a prompt shown in the app ended.
 enum Answer {
     Approved(Approved),
+    /// Approved on the paired phone, which has no passphrase to give.
+    ApprovedOnPhone,
     Denied,
     TimedOut,
     /// The process that asked ended first.
@@ -911,6 +924,13 @@ impl Asked {
                 target: Some(format!("machine {machine}")),
                 ..asked("remote rotate", true)
             },
+            Request::Phones => asked("phones", false),
+            Request::PhonePair { machine, .. } => Asked {
+                target: Some(format!("machine {machine}")),
+                ..asked("phone pair", true)
+            },
+            Request::PhonePairStop => asked("phone pair stop", true),
+            Request::PhoneUnpair { .. } => asked("phone unpair", true),
             Request::WaitApprovals { .. } => asked("wait approvals", false),
             Request::Approve { .. } => asked("approve", false),
             Request::Proven { facts, program } => Asked {
@@ -983,6 +1003,8 @@ struct Session {
     /// The local store as decrypted at unlock or last written; `None` if
     /// there was none.
     store: Option<Arc<Store>>,
+    /// A phone being paired, and the passphrase that will save it.
+    pairing: Option<Box<phone::Pairing>>,
 }
 
 enum Phase {
@@ -1051,11 +1073,21 @@ struct Inner {
     remote: Mutex<Remote>,
     /// Woken when the store turns the remote endpoint on or off.
     remote_changed: tokio::sync::Notify,
+    phone: Mutex<phone::Phone>,
+    /// Woken when the phones the approval page is for may have changed.
+    phone_woken: tokio::sync::Notify,
+    /// Bumped whenever what the approval page shows may have changed,
+    /// apart from the prompts, which `approvals_changed` covers.
+    phone_seq: watch::Sender<u64>,
 }
 
 impl Inner {
     fn remote(&self) -> MutexGuard<'_, Remote> {
         self.remote.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn phone(&self) -> MutexGuard<'_, phone::Phone> {
+        self.phone.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     fn state(&self) -> MutexGuard<'_, State> {
@@ -1098,6 +1130,9 @@ impl Daemon {
                 tailnet: None,
                 remote: Mutex::new(Remote::default()),
                 remote_changed: tokio::sync::Notify::new(),
+                phone: Mutex::new(phone::Phone::default()),
+                phone_woken: tokio::sync::Notify::new(),
+                phone_seq: watch::channel(0).0,
             }),
         }
     }
@@ -1217,19 +1252,20 @@ impl Daemon {
     /// | store ask                                 | values and passphrase typed in the app |
     /// | mark or unmark an environment or secret   | passphrase                    |
     /// | get                                       | passphrase                    |
-    /// | a value marked sensitive, to run or get   | approval in the app           |
+    /// | a value marked sensitive, to run or get   | approval in the app, or on the paired phone |
     /// | inspect, reveal (the app's view)          | passphrase; sensitive too     |
     /// | wait for approvals, approve or deny       | allowed; approving takes the passphrase |
     ///
     /// Approval: a `run` or `get` that would hand out a value marked
     /// sensitive waits, for at most `approval_timeout`, until a person
-    /// types the store passphrase into the app's prompt for it, or denies
-    /// it. If the app is not open, it is refused at once. A `store import`
-    /// sent with no passphrase waits the same way: the prompt names each
-    /// section, file and key, and the passphrase typed there does the
-    /// write, and unlocks a locked daemon. A `store ask` waits that way
-    /// too, for the values as well: it sends none, and the prompt has a
-    /// field for each key it names.
+    /// types the store passphrase into the app's prompt for it, approves
+    /// it on the paired phone with its passkey (`broker::phone`), or denies
+    /// it in either place. If the app is not open, it is refused at once.
+    /// A `store import` sent with no passphrase waits the same way, in the
+    /// app alone: the prompt names each section, file and key, and the
+    /// passphrase typed there does the write, and unlocks a locked daemon.
+    /// A `store ask` waits that way too, for the values as well: it sends
+    /// none, and the prompt has a field for each key it names.
     ///
     /// With an audit log, records every denial, and every request that
     /// changes state or prints a value, before replying; if a hand-out
@@ -1358,6 +1394,7 @@ impl Daemon {
             Request::Status { facts } => self.status(facts).await.map(|mut report| {
                 report.app = self.inner.approvals().app_open();
                 report.remote = self.remote_status();
+                report.phone = self.phone_status();
                 report.waiting = self.waiting();
                 report.acknowledged = self.acknowledged();
                 report.shared = self.shared(&report.waiting);
@@ -1408,6 +1445,19 @@ impl Daemon {
                     st.revoke_remote(&machine, project.as_ref())
                 })
                 .await
+            }
+            Request::Phones => self.phones().await,
+            Request::PhonePair {
+                machine,
+                passphrase,
+            } => {
+                self.phone_pair(&machine, passphrase.into_passphrase())
+                    .await
+            }
+            Request::PhonePairStop => Ok(self.phone_pair_stop()),
+            Request::PhoneUnpair { passphrase } => {
+                self.store_write(passphrase.into_passphrase(), None, Store::unpair_phone)
+                    .await
             }
             Request::WaitApprovals { known } => Ok(self.wait_approvals(known, caller).await),
             Request::Approve {
@@ -1769,6 +1819,7 @@ impl Daemon {
                     acknowledged: Vec::new(),
                     shared: Vec::new(),
                     app: false,
+                    phone: None,
                 })
             }),
             Request::Status {
@@ -2217,10 +2268,12 @@ impl Daemon {
                 cache: BTreeMap::new(),
                 superseded: Vec::new(),
                 store,
+                pairing: None,
             });
             id
         };
         tokio::spawn(watch_idle(Arc::downgrade(&self.inner), id));
+        self.inner.phone_woken.notify_one();
         info!(idle_timeout = ?idle, "unlocked");
         Ok(())
     }
@@ -2237,6 +2290,7 @@ impl Daemon {
         if self.inner.state().lock() {
             info!("locked");
         }
+        self.inner.phone_woken.notify_one();
     }
 
     /// Decrypts the store with `passphrase`, applies `change`, and writes it
@@ -2308,6 +2362,9 @@ impl Daemon {
             ));
         }
         self.replace_store(store);
+        // The paired phone may be another one now, or none.
+        self.inner.phone_woken.notify_one();
+        self.inner.phone_seq.send_modify(|n| *n += 1);
         Ok(change)
     }
 
@@ -2549,6 +2606,7 @@ impl Daemon {
                 acknowledged: Vec::new(),
                 shared: Vec::new(),
                 app: false,
+                phone: None,
             });
         };
         self.status_of(&facts, Who::Anyone).await
@@ -2600,6 +2658,7 @@ impl Daemon {
             acknowledged: Vec::new(),
             shared: Vec::new(),
             app: false,
+            phone: None,
         })
     }
 
@@ -3582,7 +3641,7 @@ impl Daemon {
         };
         info!(%project, %env, "waiting for approval in the app");
         let decision = match self.ask_app(ask.caller, prompt, wait).await {
-            Answer::Approved(_) => Decision::Allowed,
+            Answer::Approved(_) | Answer::ApprovedOnPhone => Decision::Allowed,
             Answer::Denied => Decision::Denied,
             Answer::TimedOut => Decision::TimedOut,
             Answer::CallerGone => {
@@ -3610,13 +3669,14 @@ impl Daemon {
     /// waits for a person's answer, for at most `wait`.
     async fn ask_app(&self, caller: &Caller, mut prompt: ApprovalPrompt, wait: Duration) -> Answer {
         let (reply, answer) = oneshot::channel();
-        let id = {
+        let (id, shown) = {
             let mut a = self.inner.approvals();
             a.next += 1;
             prompt.id = a.next;
+            let shown = prompt.clone();
             a.pending
                 .insert(prompt.id, (prompt, Instant::now() + wait, reply));
-            a.next
+            (a.next, shown)
         };
         let _asking = Asking {
             inner: &self.inner,
@@ -3637,14 +3697,26 @@ impl Daemon {
                 }
             }
         };
-        tokio::select! {
+        // A person's answer, or how it ended without one.
+        let reply = tokio::select! {
             answered = tokio::time::timeout(wait, answer) => match answered {
-                Ok(Ok(Some(approved))) => Answer::Approved(approved),
-                Ok(_) => Answer::Denied,
-                Err(_) => Answer::TimedOut,
+                Ok(Ok(reply)) => Ok(reply),
+                Ok(Err(_)) => Ok(Reply::Desk(None)),
+                Err(_) => Err(Answer::TimedOut),
             },
-            () = gone => Answer::CallerGone,
-            () = closed => Answer::AppClosed,
+            () = gone => Err(Answer::CallerGone),
+            () = closed => Err(Answer::AppClosed),
+        };
+        self.note_answer(
+            &shown,
+            reply.as_ref().ok(),
+            matches!(reply, Err(Answer::TimedOut)),
+        );
+        match reply {
+            Ok(Reply::Desk(Some(approved))) => Answer::Approved(approved),
+            Ok(Reply::Phone(true)) => Answer::ApprovedOnPhone,
+            Ok(Reply::Desk(None) | Reply::Phone(false)) => Answer::Denied,
+            Err(ended) => ended,
         }
     }
 
@@ -3832,7 +3904,11 @@ impl Daemon {
                 *approval.lock().unwrap_or_else(PoisonError::into_inner) = Some(Decision::Allowed);
                 return Ok(approved.passphrase);
             }
-            Answer::Denied => (Some(Decision::Denied), ImportRefusal::Denied),
+            // The phone approves no import: it has no passphrase to write
+            // the store with, so `phone_answer` refuses before this.
+            Answer::Denied | Answer::ApprovedOnPhone => {
+                (Some(Decision::Denied), ImportRefusal::Denied)
+            }
             Answer::TimedOut => (Some(Decision::TimedOut), ImportRefusal::TimedOut(wait)),
             Answer::CallerGone => (Some(Decision::Denied), ImportRefusal::CallerGone),
             Answer::AppClosed => (None, ImportRefusal::NoApp),
@@ -3927,7 +4003,10 @@ impl Daemon {
                     .write_typed(section, keys, approved, unlock, caller)
                     .await;
             }
-            Answer::Denied => (Some(Decision::Denied), ImportRefusal::Denied),
+            // Nor typed values, which it could not give either.
+            Answer::Denied | Answer::ApprovedOnPhone => {
+                (Some(Decision::Denied), ImportRefusal::Denied)
+            }
             Answer::TimedOut => (Some(Decision::TimedOut), ImportRefusal::TimedOut(wait)),
             Answer::CallerGone => (Some(Decision::Denied), ImportRefusal::CallerGone),
             Answer::AppClosed => (None, ImportRefusal::NoApp),
@@ -4083,11 +4162,11 @@ impl Daemon {
         };
         // Fails only if the request stopped waiting just now; it is then
         // refused anyway.
-        let approved = match reply.send(approved) {
+        let approved = match reply.send(Reply::Desk(approved)) {
             Ok(()) => true,
             Err(sent) => {
                 debug!(id, "an answered request stopped waiting");
-                sent.is_some()
+                matches!(sent, Reply::Desk(Some(_)))
             }
         };
         self.inner.approvals_changed.send_modify(|n| *n += 1);
@@ -4471,6 +4550,7 @@ async fn watch_idle(inner: Weak<Inner>, id: u64) {
             Phase::Unlocked(s) if s.id == id => {
                 if Instant::now() >= s.deadline {
                     st.lock();
+                    inner.phone_woken.notify_one();
                     info!("locked after the idle timeout");
                     return;
                 }
@@ -4551,7 +4631,7 @@ pub fn wire_error(e: &ResolveError) -> WireError {
         | ResolveError::Import(ImportRefusal::Denied)
         | ResolveError::Typing(ImportRefusal::Denied) => hinted(
             ErrorCode::NotApproved,
-            Some("a person refused this in the app: ask them before running it again"),
+            Some("a person refused this: ask them before running it again"),
         ),
         ResolveError::CallerGone { .. }
         | ResolveError::ApprovalChanged { .. }
@@ -4630,6 +4710,7 @@ pub fn wire_error(e: &ResolveError) -> WireError {
             | StoreError::NoKey { .. }
             | StoreError::NoSection { .. }
             | StoreError::NoGrant { .. }
+            | StoreError::NoPhone
             | StoreError::FileSecretMark
             | StoreError::CoveredByPrefix { .. }
             | StoreError::Io { .. } => hinted(ErrorCode::Store, None),

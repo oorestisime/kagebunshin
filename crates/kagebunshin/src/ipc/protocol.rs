@@ -359,7 +359,32 @@ pub enum Request {
         project: ProjectName,
         passphrase: WireSecret,
     },
+    /// The phones on this tailnet, to pick the one to pair from. Local
+    /// callers only.
+    Phones,
+    /// Starts pairing `machine`, a phone on this tailnet (its name or node
+    /// id), after decrypting the store with `passphrase`: for
+    /// [`PHONE_PAIRING`] the approval page lets that phone make the passkey
+    /// it will approve requests with, and the daemon keeps the passphrase
+    /// to save it with. Replaces a pairing already going; the phone paired
+    /// before stays paired until the new one has made its passkey. Local
+    /// callers only.
+    PhonePair {
+        machine: String,
+        passphrase: WireSecret,
+    },
+    /// Ends a pairing that has not finished, and forgets its passphrase.
+    /// Local callers only.
+    PhonePairStop,
+    /// Removes the paired phone, after decrypting the store with
+    /// `passphrase`. Local callers only.
+    PhoneUnpair {
+        passphrase: WireSecret,
+    },
 }
+
+/// How long a phone has to make its passkey once pairing starts.
+pub const PHONE_PAIRING: std::time::Duration = std::time::Duration::from_mins(10);
 
 /// One section of [`Request::StoreImport`]: the values of `files`, in file
 /// order, so a later one's value for a key is the one kept.
@@ -643,6 +668,19 @@ pub enum Response {
         machine: String,
         token: WireSecret,
     },
+    /// The reply to `phones`.
+    Phones {
+        phones: Vec<PhoneChoice>,
+    },
+    /// The reply to `phone_pair`: the phone `name` may make its passkey on
+    /// the approval page at `url` for the next `seconds`.
+    PhonePairing {
+        name: String,
+        url: String,
+        seconds: u64,
+    },
+    /// The reply to `phone_pair_stop`.
+    PhonePairStopped,
     /// The reply to `store_ask`: the keys of `section` a person typed a
     /// value for, in the order asked, those of them that had one before,
     /// and the keys asked for that they left empty, which are as they were.
@@ -761,6 +799,10 @@ pub struct StatusReport {
     /// The remote endpoint, for local callers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote: Option<RemoteStatus>,
+    /// The approval page and the phone paired with it, for local callers;
+    /// none when no phone is paired or being paired.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phone: Option<Box<PhoneStatus>>,
     /// Every environment that looks like production and waits for a human
     /// to mark it sensitive or acknowledge it is not production, for local
     /// callers while the daemon is unlocked. Names only.
@@ -887,6 +929,70 @@ pub struct RemoteStatus {
     /// Known only while the daemon is unlocked.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub grants: Vec<GrantView>,
+}
+
+/// The approval page: the phone paired with it, and where it is served.
+/// Names only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PhoneStatus {
+    /// The paired phone; known only while the daemon is unlocked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paired: Option<PhoneView>,
+    /// The page's address, `https://name:port`, while it is served.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// Why it is not served, when it should be.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub problem: Option<String>,
+    /// The phone being paired now.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pairing: Option<PhonePairingView>,
+    /// The last request answered on the phone since the daemon started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last: Option<PhoneAnswer>,
+}
+
+/// A phone on this tailnet that could be paired.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PhoneChoice {
+    /// The first label of its `MagicDNS` name.
+    pub name: String,
+    /// Its stable node id, which [`Request::PhonePair`] also takes.
+    pub node: String,
+    /// Its operating system as tailscaled names it: `iOS` or `android`.
+    pub os: String,
+}
+
+/// The paired phone as `status` shows it: never its passkey.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PhoneView {
+    pub name: String,
+    pub node: String,
+    /// When it was paired, in Unix seconds.
+    pub paired: u64,
+    /// When it last opened the page since the daemon started, in Unix
+    /// seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seen: Option<u64>,
+}
+
+/// A pairing going on: which phone, and the seconds it has left.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PhonePairingView {
+    pub name: String,
+    pub left: u64,
+}
+
+/// A request answered on the phone: the id its prompt had, what it was
+/// for, and the answer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PhoneAnswer {
+    pub id: u64,
+    pub project: ProjectName,
+    pub env: EnvName,
+    pub approved: bool,
+    /// Unix seconds.
+    pub time: u64,
 }
 
 /// A remote grant as `status` shows it: never its token or the token's
@@ -1337,6 +1443,7 @@ mod tests {
             acknowledged: Vec::new(),
             shared: Vec::new(),
             app: false,
+            phone: None,
         });
         let day = 86_400;
         let soon = TokenExpiry {
@@ -1516,5 +1623,72 @@ mod tests {
         claimed["token"] = json!("00".repeat(32));
         let read: RemotePeer = serde_json::from_value(claimed).unwrap();
         assert_eq!(read, peer.named());
+    }
+
+    /// What a status says of the paired phone has nothing of its passkey.
+    #[test]
+    fn phone_wire_shape() {
+        let pair = Request::PhonePair {
+            machine: "phone".into(),
+            passphrase: WireSecret::new("p".into()),
+        };
+        assert_eq!(
+            serde_json::to_value(&pair).unwrap(),
+            json!({"op": "phone_pair", "machine": "phone", "passphrase": "p"})
+        );
+        assert_eq!(
+            serde_json::to_value(Request::Phones).unwrap(),
+            json!({"op": "phones"})
+        );
+        assert_eq!(
+            serde_json::to_value(Response::Phones {
+                phones: vec![PhoneChoice {
+                    name: "phone".into(),
+                    node: "nPHONE".into(),
+                    os: "iOS".into(),
+                }]
+            })
+            .unwrap(),
+            json!({"kind": "phones", "phones": [{"name": "phone", "node": "nPHONE", "os": "iOS"}]})
+        );
+        assert_eq!(
+            serde_json::to_value(Request::PhonePairStop).unwrap(),
+            json!({"op": "phone_pair_stop"})
+        );
+        assert_eq!(
+            serde_json::to_value(Request::PhoneUnpair {
+                passphrase: WireSecret::new("p".into())
+            })
+            .unwrap(),
+            json!({"op": "phone_unpair", "passphrase": "p"})
+        );
+        let pairing = Response::PhonePairing {
+            name: "phone".into(),
+            url: "https://self.example.ts.net:47318".into(),
+            seconds: 600,
+        };
+        assert_eq!(
+            serde_json::to_value(&pairing).unwrap(),
+            json!({"kind": "phone_pairing", "name": "phone", "url": "https://self.example.ts.net:47318", "seconds": 600})
+        );
+        let status = PhoneStatus {
+            paired: Some(PhoneView {
+                name: "phone".into(),
+                node: "nPHONE".into(),
+                paired: 1_767_225_600,
+                seen: None,
+            }),
+            url: Some("https://self.example.ts.net:47318".into()),
+            problem: None,
+            pairing: None,
+            last: None,
+        };
+        assert_eq!(
+            serde_json::to_value(&status).unwrap(),
+            json!({
+                "paired": {"name": "phone", "node": "nPHONE", "paired": 1_767_225_600u64},
+                "url": "https://self.example.ts.net:47318",
+            })
+        );
     }
 }

@@ -20,7 +20,7 @@ aws-config = "1.13.2"
 aws-sdk-secretsmanager = { version = "1.127.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-smithy-http-client = { version = "1.5.2", features = ["rustls-aws-lc"] }
 insta = "1.49.0"
-kagebunshin = { path = "../kagebunshin", version = "0.0.1-alpha.11" }
+kagebunshin = { path = "../kagebunshin", version = "0.0.1-alpha.12" }
 libc = "0.2.191"
 serde_json = "1"
 tempfile = "3.27.0"

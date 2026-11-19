@@ -54,6 +54,9 @@ pub fn deadline(req: &Request, local: Duration) -> Duration {
         }
         Request::ProtonConnect { .. }
         | Request::RemoteGrant { .. }
+        // Both ask Tailscale which machines there are.
+        | Request::Phones
+        | Request::PhonePair { .. }
         | Request::Status { facts: Some(_) }
         | Request::Diff { .. }
         | Request::CheckProject { .. }
@@ -86,6 +89,8 @@ pub fn deadline(req: &Request, local: Duration) -> Duration {
         | Request::RemoteEnable { .. }
         | Request::RemoteRevoke { .. }
         | Request::RemoteRotate { .. }
+        | Request::PhonePairStop
+        | Request::PhoneUnpair { .. }
         | Request::Proven { .. }
         | Request::StoreList => local,
     }

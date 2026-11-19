@@ -25,8 +25,8 @@ use std::sync::{Arc, Mutex};
 use kagebunshin::cli::error::start_daemon_hint;
 use kagebunshin::ipc::client::{Client, ClientError, DEFAULT_TIMEOUT};
 use kagebunshin::ipc::protocol::{
-    ApprovalPrompt, ErrorCode, Facts, Fix, GrantView, KeyStatus, Proof, RemoteStatus, Request,
-    Response, SharedSecret, TokenExpiry, VarStatus, WaitingEnv, WireSecret,
+    ApprovalPrompt, ErrorCode, Facts, Fix, GrantView, KeyStatus, PhoneChoice, PhoneStatus, Proof,
+    RemoteStatus, Request, Response, SharedSecret, TokenExpiry, VarStatus, WaitingEnv, WireSecret,
 };
 use kagebunshin::source::ProviderStatus;
 use kagebunshin::store::Section;
@@ -157,6 +157,29 @@ pub enum Job {
         grant: Grant,
         passphrase: WireSecret,
     },
+    /// The phones on this tailnet that could be paired.
+    Phones,
+    /// Let a phone make the passkey it approves with, for a few minutes.
+    PairPhone {
+        phone: PhoneChoice,
+        passphrase: WireSecret,
+    },
+    /// End a pairing before its time is up.
+    StopPairing,
+    /// Remove the paired phone, by the name to say of it.
+    UnpairPhone {
+        name: String,
+        passphrase: WireSecret,
+    },
+}
+
+/// A pairing under way: the phone, and the address it opens to make its
+/// passkey. The address is no secret: the page is served to that phone
+/// alone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pairing {
+    pub phone: PhoneChoice,
+    pub url: String,
 }
 
 /// A remote grant, as a change to it names it: the machine by its node id,
@@ -245,6 +268,9 @@ pub enum Answer {
     Providers(Result<Vec<ProviderStatus>, Problem>),
     /// The token a grant now has.
     Token(Result<NewToken, Problem>),
+    Phones(Result<Vec<PhoneChoice>, Problem>),
+    /// A phone may now make its passkey.
+    Pairing(Result<Pairing, Problem>),
     /// What a lock, unlock, sync, mark, connect or acknowledgement did.
     Action(Result<Done, Problem>),
 }
@@ -266,6 +292,9 @@ pub struct Probed {
     pub shared: Vec<SharedSecret>,
     /// The remote endpoint; its grants are known only while unlocked.
     pub remote: Option<RemoteStatus>,
+    /// The approval page and the phone paired with it; none when no phone
+    /// is paired or being paired, which is all that is known while locked.
+    pub phone: Option<Box<PhoneStatus>>,
 }
 
 #[cfg(test)]
@@ -278,6 +307,7 @@ impl Probed {
             acknowledged: Vec::new(),
             shared: Vec::new(),
             remote: None,
+            phone: None,
         }
     }
 }
@@ -303,6 +333,10 @@ pub enum Done {
     Unmarked(usize),
     /// A remote grant was ended.
     GrantRevoked(Grant),
+    /// The pairing under way, if any, was ended.
+    PairingStopped,
+    /// The phone of this name is paired no more.
+    PhoneUnpaired(String),
 }
 
 /// One environment as the daemon resolves it: names and origins, never values.
@@ -405,6 +439,7 @@ pub fn run(client: &mut dyn DaemonClient, job: Job) -> Answer {
                 acknowledged: r.acknowledged,
                 shared: r.shared,
                 remote: r.remote,
+                phone: r.phone,
             }),
             Ok(_) => Err(unexpected()),
             Err(e) => Err(e.into()),
@@ -465,6 +500,34 @@ pub fn run(client: &mut dyn DaemonClient, job: Job) -> Answer {
                 Err(e) => Err(e.into()),
             },
         ),
+        Job::Phones => Answer::Phones(match client.request(Request::Phones) {
+            Ok(Response::Phones { phones }) => Ok(phones),
+            Ok(_) => Err(unexpected()),
+            Err(e) => Err(e.into()),
+        }),
+        Job::PairPhone { phone, passphrase } => Answer::Pairing(
+            // By its node id: a name is whatever a machine calls itself.
+            match client.request(Request::PhonePair {
+                machine: phone.node.clone(),
+                passphrase,
+            }) {
+                Ok(Response::PhonePairing { url, .. }) => Ok(Pairing { phone, url }),
+                Ok(_) => Err(unexpected()),
+                Err(e) => Err(e.into()),
+            },
+        ),
+        Job::StopPairing => Answer::Action(match client.request(Request::PhonePairStop) {
+            Ok(Response::PhonePairStopped) => Ok(Done::PairingStopped),
+            Ok(_) => Err(unexpected()),
+            Err(e) => Err(e.into()),
+        }),
+        Job::UnpairPhone { name, passphrase } => {
+            Answer::Action(match client.request(Request::PhoneUnpair { passphrase }) {
+                Ok(Response::Store { .. }) => Ok(Done::PhoneUnpaired(name)),
+                Ok(_) => Err(unexpected()),
+                Err(e) => Err(e.into()),
+            })
+        }
         job => Answer::Action(action(client, job)),
     }
 }
@@ -482,7 +545,11 @@ fn action(client: &mut dyn DaemonClient, job: Job) -> Result<Done, Problem> {
         | Job::Env { .. }
         | Job::Inspect { .. }
         | Job::Reveal { .. }
-        | Job::RotateGrant { .. } => {
+        | Job::RotateGrant { .. }
+        | Job::Phones
+        | Job::PairPhone { .. }
+        | Job::StopPairing
+        | Job::UnpairPhone { .. } => {
             unreachable!("not an action")
         }
         Job::RevokeGrant { grant, passphrase } => {
@@ -859,6 +926,7 @@ mod tests {
             acknowledged: Vec::new(),
             shared: Vec::new(),
             app: false,
+            phone: None,
         })
     }
 
@@ -1369,6 +1437,85 @@ mod tests {
         );
     }
 
+    /// A phone is paired by its node id; what comes back is where it
+    /// opens the page, and the passphrase goes with the request only.
+    #[test]
+    fn a_phone_is_listed_paired_and_removed() {
+        let phone = || PhoneChoice {
+            name: "phone".into(),
+            node: "nPHONE".into(),
+            os: "iOS".into(),
+        };
+        let fake = FakeClient::default();
+        fake.reply(Ok(Response::Phones {
+            phones: vec![phone()],
+        }))
+        .reply(Ok(Response::PhonePairing {
+            name: "phone".into(),
+            url: "https://self.example.ts.net:47318".into(),
+            seconds: 600,
+        }))
+        .reply(Ok(Response::PhonePairStopped))
+        .reply(Ok(Response::Store {
+            change: Change::Removed,
+            locked: false,
+        }))
+        .reply(Err(ClientError::Daemon(WireError::new(
+            ErrorCode::WrongPassphrase,
+            "wrong passphrase",
+        ))));
+        let mut c = fake.clone();
+        assert_eq!(run(&mut c, Job::Phones), Answer::Phones(Ok(vec![phone()])));
+        let pair = || Job::PairPhone {
+            phone: phone(),
+            passphrase: secret("pw"),
+        };
+        assert_eq!(
+            run(&mut c, pair()),
+            Answer::Pairing(Ok(Pairing {
+                phone: phone(),
+                url: "https://self.example.ts.net:47318".into(),
+            }))
+        );
+        assert_eq!(
+            run(&mut c, Job::StopPairing),
+            Answer::Action(Ok(Done::PairingStopped))
+        );
+        let unpair = Job::UnpairPhone {
+            name: "phone".into(),
+            passphrase: secret("pw"),
+        };
+        assert_eq!(
+            run(&mut c, unpair),
+            Answer::Action(Ok(Done::PhoneUnpaired("phone".into())))
+        );
+        let Answer::Pairing(Err(p)) = run(&mut c, pair()) else {
+            panic!()
+        };
+        assert_eq!(
+            (p.message.as_str(), p.unreachable),
+            ("wrong passphrase", false)
+        );
+        assert_eq!(
+            *fake.asked.lock().unwrap(),
+            [
+                Request::Phones,
+                Request::PhonePair {
+                    machine: "nPHONE".into(),
+                    passphrase: secret("pw"),
+                },
+                Request::PhonePairStop,
+                Request::PhoneUnpair {
+                    passphrase: secret("pw"),
+                },
+                Request::PhonePair {
+                    machine: "nPHONE".into(),
+                    passphrase: secret("pw"),
+                },
+            ]
+        );
+    }
+
     #[test]
     fn the_worker_answers_in_order_and_wakes_the_window() {
         let fake = FakeClient::default();
@@ -1381,6 +1528,7 @@ mod tests {
             acknowledged: Vec::new(),
             shared: Vec::new(),
             app: false,
+            phone: None,
         })));
         let (woke, wakes) = mpsc::channel();
         let waker: Waker = Arc::new(move || {

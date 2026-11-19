@@ -16,27 +16,36 @@
 //! that shares secrets with others shows which first, and anything the store's
 //! passphrase unlocks waits for them to type it: every mark, a look at an
 //! environment marked sensitive, revealing a value, saving a Proton Pass
-//! token, acknowledging an environment as not production, and giving a
-//! remote grant a new token or ending it. Project-file edits
+//! token, acknowledging an environment as not production, giving a
+//! remote grant a new token or ending it, and pairing a phone or removing
+//! it. Project-file edits
 //! come back as [`Effect::Edit`] for the window to make on its own thread;
 //! everything else goes to the daemon, one change at a time. A revealed value
 //! is held only until the window hides it, the project changes or the daemon
 //! locks, and a grant's new token until the window puts it away, another
 //! change is asked for or the daemon locks.
+//!
+//! A phone being paired is probed for every second, so the window says so
+//! as soon as it has made its key. The pairing is ended when the window
+//! stops showing the way in: the daemon keeps the passphrase for as long
+//! as it lasts.
 
 use kagebunshin::cli::edit::NewSource;
 use kagebunshin::ipc::protocol::{
-    Facts, RemoteStatus, SharedSecret, TokenExpiry, WaitingEnv, WireSecret,
+    Facts, PhoneChoice, PhoneStatus, RemoteStatus, SharedSecret, TokenExpiry, WaitingEnv,
+    WireSecret,
 };
 use kagebunshin::source::ProviderStatus;
 use kagebunshin::store::Section;
 use kagebunshin::types::{EnvName, KeyName, Origin, ProjectName, Provider};
 use rune::machine::{Attempt, Effects, Seq};
 
-use crate::daemon::{Answer, Done, EnvReport, Grant, Job, Mark, NewToken, Problem};
+use crate::daemon::{Answer, Done, EnvReport, Grant, Job, Mark, NewToken, Pairing, Problem};
 
 /// Seconds between probes while the daemon answers.
 pub const PROBE_EVERY: f64 = 5.0;
+/// Seconds between them while a phone is being paired.
+pub const PAIRING_PROBE_EVERY: f64 = 1.0;
 /// Seconds before the next try while it does not.
 pub const RETRY_AFTER: f64 = 2.0;
 /// Seconds a notice that only says a change was made stays up. One with
@@ -199,6 +208,11 @@ pub enum Change {
     },
     /// Ends a remote grant, with the passphrase.
     RevokeGrant(Grant),
+    /// Lets a phone make the passkey it approves with, with the
+    /// passphrase. One paired before it approves until then.
+    PairPhone(PhoneChoice),
+    /// Removes the paired phone, of this name, with the passphrase.
+    UnpairPhone(String),
 }
 
 impl Change {
@@ -224,6 +238,11 @@ impl Change {
                 return Some(format!(
                     "Revoke machine {}'s grant for {}? It will get nothing of that project until it is granted again.",
                     grant.machine, grant.project
+                ));
+            }
+            Change::UnpairPhone(name) => {
+                return Some(format!(
+                    "Remove {name}? Requests will be approved at this computer only, until a phone is paired again."
                 ));
             }
             _ => return None,
@@ -275,6 +294,8 @@ pub enum Purpose {
     Unmark(Vec<Origin>),
     RotateGrant(Grant),
     RevokeGrant(Grant),
+    PairPhone(PhoneChoice),
+    UnpairPhone(String),
 }
 
 /// A change under way, or waiting on the person.
@@ -409,6 +430,16 @@ pub struct Providers {
     pub last: Option<Result<Vec<ProviderStatus>, Problem>>,
 }
 
+/// The phones on the tailnet that could be paired, as the daemon said.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Phones {
+    /// Asked about: asked again on Refresh and after every change.
+    pub asked: bool,
+    pub asking: Option<Attempt>,
+    /// The last answer, kept while it is asked again.
+    pub last: Option<Result<Vec<PhoneChoice>, Problem>>,
+}
+
 #[derive(Debug)]
 pub struct Machine {
     seq: Seq,
@@ -432,6 +463,12 @@ pub struct Machine {
     pub remote: Option<RemoteStatus>,
     /// The token a grant was just given, until it is put away.
     pub token: Option<NewToken>,
+    /// The approval page and the phone paired with it, as the last probe
+    /// saw; none when no phone is paired or being paired, or while locked.
+    pub phone: Option<Box<PhoneStatus>>,
+    pub phones: Phones,
+    /// The pairing this window started, while it shows the way in.
+    pub pairing: Option<Pairing>,
     /// The value asked for while it is on its way.
     revealing: Option<(EnvName, KeyName)>,
     pub revealed: Option<Revealed>,
@@ -456,6 +493,9 @@ impl Default for Machine {
             shared: Vec::new(),
             remote: None,
             token: None,
+            phone: None,
+            phones: Phones::default(),
+            pairing: None,
             revealing: None,
             revealed: None,
             providers: Providers::default(),
@@ -487,10 +527,16 @@ pub enum Event {
     },
     /// Hide the value on show.
     Conceal,
-    /// Put away the token a grant was just given.
+    /// Put away the token a grant was just given, and end the pairing
+    /// under way.
     Forget,
     /// Ask how the providers are, and again whenever the columns are.
     CheckProviders,
+    /// Ask which phones could be paired, and again whenever the columns
+    /// are.
+    CheckPhones,
+    /// Ask the daemon how it is now, if it is not being asked.
+    Probe,
     /// The Proton Pass token and the passphrase, both typed.
     ConnectProton {
         token: WireSecret,
@@ -569,12 +615,66 @@ impl Machine {
         effects.push(Effect::Run(attempt, Job::Providers));
     }
 
+    fn check_phones(&mut self, effects: &mut Effects<Effect>) {
+        let attempt = self.seq.next();
+        self.phones.asked = true;
+        self.phones.asking = Some(attempt);
+        effects.push(Effect::Run(attempt, Job::Phones));
+    }
+
+    /// Takes in what a probe says of the phone. A pairing this window
+    /// started that is over says how it ended, and a request answered on
+    /// the phone since the last probe says so: the prompt for it closed
+    /// here without a word.
+    fn heard(&mut self, phone: Option<Box<PhoneStatus>>) {
+        // The paired phone, and when: pairing the same one again differs.
+        let paired = |p: &Option<Box<PhoneStatus>>| {
+            let view = p.as_ref()?.paired.as_ref()?;
+            Some((view.node.clone(), view.paired))
+        };
+        let going = phone.as_ref().is_some_and(|p| p.pairing.is_some());
+        if !going && let Some(pairing) = self.pairing.take() {
+            let name = pairing.phone.name;
+            let now = paired(&phone);
+            let done = now != paired(&self.phone)
+                && now.is_some_and(|(node, _)| node == pairing.phone.node);
+            self.notice = Some(if done {
+                Notice::Done {
+                    message: format!("Paired {name}: it approves requests now."),
+                    warnings: Vec::new(),
+                }
+            } else {
+                Notice::Failed(Problem::new(format!(
+                    "{name} was not paired: its time to make a key is up. Pair it again."
+                )))
+            });
+        } else if let (Some(was), Some(now)) = (&self.phone, &phone)
+            && was.last != now.last
+            && let Some(last) = &now.last
+        {
+            let name = now.paired.as_ref().map_or("the phone", |p| &p.name);
+            self.notice = Some(Notice::Done {
+                message: format!(
+                    "{} on {name}: {}/{}.",
+                    if last.approved { "Approved" } else { "Denied" },
+                    last.project,
+                    last.env
+                ),
+                warnings: Vec::new(),
+            });
+        }
+        self.phone = phone;
+    }
+
     /// Asks again about every column asked about before, and the providers
-    /// if they were. One marked sensitive goes back to waiting for the
-    /// passphrase.
+    /// and the phones if they were. One marked sensitive goes back to
+    /// waiting for the passphrase.
     fn reload(&mut self, effects: &mut Effects<Effect>) {
         if self.providers.asked {
             self.check_providers(effects);
+        }
+        if self.phones.asked {
+            self.check_phones(effects);
         }
         let asked: Vec<EnvName> = self
             .shown
@@ -638,6 +738,12 @@ impl Machine {
             Change::RevokeGrant(grant) => {
                 self.pending = Pending::Passphrase(Purpose::RevokeGrant(grant));
             }
+            Change::PairPhone(phone) => {
+                self.pending = Pending::Passphrase(Purpose::PairPhone(phone));
+            }
+            Change::UnpairPhone(name) => {
+                self.pending = Pending::Passphrase(Purpose::UnpairPhone(name));
+            }
         }
     }
 
@@ -658,6 +764,8 @@ impl Machine {
         if locked {
             self.revealed = None;
             self.token = None;
+            // The daemon dropped it with the session.
+            self.pairing = None;
             self.waiting.clear();
             self.acknowledged.clear();
             self.shared.clear();
@@ -784,10 +892,61 @@ fn react(m: &mut Machine, event: Event) -> Effects<Effect> {
             }
         }
         Event::Conceal => m.revealed = None,
-        Event::Forget => m.token = None,
+        Event::Forget => {
+            m.token = None;
+            if m.pairing.take().is_some() {
+                // Nothing waits for its answer.
+                let attempt = m.seq.next();
+                effects.push(Effect::Run(attempt, Job::StopPairing));
+            }
+        }
         Event::CheckProviders => {
             if m.providers.asking.is_none() {
                 m.check_providers(&mut effects);
+            }
+        }
+        Event::CheckPhones => {
+            if m.phones.asking.is_none() {
+                m.check_phones(&mut effects);
+            }
+        }
+        Event::Probe => {
+            if !matches!(m.probe, Probe::Asking(_)) {
+                m.probe(&mut effects);
+            }
+        }
+        Event::Answer {
+            attempt,
+            answer: Answer::Phones(result),
+            ..
+        } => {
+            if m.phones.asking != Some(attempt) {
+                return effects;
+            }
+            m.phones.asking = None;
+            if let Err(p) = &result
+                && p.unreachable
+            {
+                m.conn = Conn::Down(p.clone());
+            }
+            m.phones.last = Some(result);
+        }
+        Event::Answer {
+            attempt,
+            answer: Answer::Pairing(result),
+            ..
+        } => {
+            if m.pending != Pending::Running(attempt) {
+                return effects;
+            }
+            m.pending = Pending::None;
+            match result {
+                Ok(pairing) => {
+                    m.pairing = Some(pairing);
+                    // Probed from here on for the phone making its key.
+                    m.probe(&mut effects);
+                }
+                Err(p) => m.failed(p),
             }
         }
         Event::Answer {
@@ -823,7 +982,12 @@ fn react(m: &mut Machine, event: Event) -> Effects<Effect> {
                     m.acknowledged = probed.acknowledged;
                     m.shared = probed.shared;
                     m.remote = probed.remote;
-                    now + PROBE_EVERY
+                    m.heard(probed.phone);
+                    if m.pairing.is_some() {
+                        now + PAIRING_PROBE_EVERY
+                    } else {
+                        now + PROBE_EVERY
+                    }
                 }
                 Err(p) => {
                     m.conn = Conn::Down(p);
@@ -832,6 +996,8 @@ fn react(m: &mut Machine, event: Event) -> Effects<Effect> {
                     m.acknowledged.clear();
                     m.shared.clear();
                     m.remote = None;
+                    m.phone = None;
+                    m.pairing = None;
                     now + RETRY_AFTER
                 }
             };
@@ -932,14 +1098,15 @@ fn react(m: &mut Machine, event: Event) -> Effects<Effect> {
             }
             m.pending = Pending::None;
             // A mark or an acknowledgement may end an environment's wait,
-            // and a grant revoked is gone: ask the daemon what is left
-            // now, not at the next probe.
+            // and a grant revoked or a phone removed is gone: ask the
+            // daemon what is left now, not at the next probe.
             if matches!(
                 result,
                 Ok(Done::Marked { .. }
                     | Done::Acknowledged { .. }
                     | Done::Unmarked(_)
-                    | Done::GrantRevoked(_))
+                    | Done::GrantRevoked(_)
+                    | Done::PhoneUnpaired(_))
             ) {
                 m.probe(&mut effects);
             }
@@ -996,6 +1163,11 @@ fn react(m: &mut Machine, event: Event) -> Effects<Effect> {
                         "Revoked machine {}'s grant for {}.",
                         grant.machine, grant.project
                     ),
+                    Vec::new(),
+                ),
+                Ok(Done::PairingStopped) => ("Stopped pairing.".to_owned(), Vec::new()),
+                Ok(Done::PhoneUnpaired(name)) => (
+                    format!("Removed {name}: requests are approved at this computer only."),
                     Vec::new(),
                 ),
             };
@@ -1139,6 +1311,12 @@ fn react(m: &mut Machine, event: Event) -> Effects<Effect> {
                 }
                 Pending::Passphrase(Purpose::RevokeGrant(grant)) => {
                     Job::RevokeGrant { grant, passphrase }
+                }
+                Pending::Passphrase(Purpose::PairPhone(phone)) => {
+                    Job::PairPhone { phone, passphrase }
+                }
+                Pending::Passphrase(Purpose::UnpairPhone(name)) => {
+                    Job::UnpairPhone { name, passphrase }
                 }
                 Pending::Passphrase(Purpose::Inspect(env)) => {
                     let attempt = m.seq.next();
@@ -1335,6 +1513,7 @@ mod tests {
                     acknowledged: Vec::new(),
                     shared: Vec::new(),
                     remote: None,
+                    phone: None,
                 })),
                 now: 0.0,
             },
@@ -2424,5 +2603,291 @@ mod tests {
         let (a, _) = runs(step(&mut m, Event::Due { now: PROBE_EVERY })).remove(0);
         answer(&mut m, a, Answer::Probe(Err(down())));
         assert_eq!(m.remote, None);
+    }
+
+    const PAGE: &str = "https://self.example.ts.net:47318";
+
+    fn pocket() -> PhoneChoice {
+        PhoneChoice {
+            name: "pocket".into(),
+            node: "nPOCKET".into(),
+            os: "iOS".into(),
+        }
+    }
+
+    /// What a probe says of the phone: pocket paired at `paired` if at
+    /// all, pairing going on or not, and the last answer given on it.
+    fn phone(paired: Option<u64>, pairing: bool, last: Option<(u64, bool)>) -> Box<PhoneStatus> {
+        use kagebunshin::ipc::protocol::{PhoneAnswer, PhonePairingView, PhoneView};
+        Box::new(PhoneStatus {
+            paired: paired.map(|paired| PhoneView {
+                name: "pocket".into(),
+                node: "nPOCKET".into(),
+                paired,
+                seen: None,
+            }),
+            url: Some(PAGE.into()),
+            problem: None,
+            pairing: pairing.then(|| PhonePairingView {
+                name: "pocket".into(),
+                left: 500,
+            }),
+            last: last.map(|(id, approved)| PhoneAnswer {
+                id,
+                project: "widget".parse().unwrap(),
+                env: "dev".parse().unwrap(),
+                approved,
+                time: 1_795_100_000,
+            }),
+        })
+    }
+
+    /// Probes, if no probe is on its way, and answers it at `now`.
+    fn hears(m: &mut Machine, now: f64, probed: Result<Probed, Problem>) {
+        let a = match m.probe {
+            Probe::Asking(a) => a,
+            Probe::Waiting { .. } => runs(step(m, Event::Probe)).remove(0).0,
+        };
+        step(
+            m,
+            Event::Answer {
+                attempt: a,
+                answer: Answer::Probe(probed),
+                now,
+            },
+        );
+    }
+
+    /// A probe at `now` that says `phone` of the phone, unlocked.
+    fn sees(m: &mut Machine, now: f64, phone: Option<Box<PhoneStatus>>) {
+        let probed = Probed {
+            phone,
+            ..Probed::locked(false)
+        };
+        hears(m, now, Ok(probed));
+    }
+
+    /// Asks to pair pocket and gives the passphrase; the daemon lets it in.
+    fn pairing(m: &mut Machine) {
+        assert!(step(m, Event::Ask(Change::PairPhone(pocket()))).is_empty());
+        assert_eq!(m.pending, Pending::Passphrase(Purpose::PairPhone(pocket())));
+        let (a, job) = runs(step(m, Event::Passphrase(pw()))).remove(0);
+        assert_eq!(
+            job,
+            Job::PairPhone {
+                phone: pocket(),
+                passphrase: pw()
+            }
+        );
+        let way_in = Pairing {
+            phone: pocket(),
+            url: PAGE.into(),
+        };
+        let after = answer(m, a, Answer::Pairing(Ok(way_in.clone())));
+        assert!(matches!(after[..], [(_, Job::Probe)]), "{after:?}");
+        assert_eq!(m.pending, Pending::None);
+        assert_eq!(m.pairing, Some(way_in));
+    }
+
+    fn notice(m: &Machine) -> Option<&str> {
+        match &m.notice {
+            Some(Notice::Done { message, .. }) => Some(message),
+            Some(Notice::Failed(p)) => Some(&p.message),
+            None => None,
+        }
+    }
+
+    /// Pairing takes the passphrase with no question first: the phone
+    /// paired before stays until the new one has made its key. From there
+    /// the daemon is asked every second, and the window says so when the
+    /// phone is in.
+    #[test]
+    fn a_phone_being_paired_is_probed_for_every_second_until_it_is_in() {
+        let mut m = shown();
+        pairing(&mut m);
+        sees(&mut m, 10.0, Some(phone(None, true, None)));
+        assert_eq!(
+            m.probe,
+            Probe::Waiting {
+                due: 10.0 + PAIRING_PROBE_EVERY
+            }
+        );
+        assert!(m.pairing.is_some());
+        assert_eq!(notice(&m), None);
+
+        sees(&mut m, 11.0, Some(phone(Some(100), false, None)));
+        assert_eq!(m.pairing, None);
+        assert_eq!(notice(&m), Some("Paired pocket: it approves requests now."));
+        assert_eq!(
+            m.probe,
+            Probe::Waiting {
+                due: 11.0 + PROBE_EVERY
+            }
+        );
+
+        // The same phone again: paired anew, at another time.
+        pairing(&mut m);
+        sees(&mut m, 20.0, Some(phone(Some(100), true, None)));
+        assert_eq!(notice(&m), None);
+        sees(&mut m, 21.0, Some(phone(Some(120), false, None)));
+        assert_eq!(notice(&m), Some("Paired pocket: it approves requests now."));
+    }
+
+    /// Its time ran out: no phone is paired, or the one paired before
+    /// still is.
+    #[test]
+    fn a_pairing_that_runs_out_says_so() {
+        for before in [None, Some(100)] {
+            let mut m = shown();
+            sees(&mut m, 0.0, Some(phone(before, false, None)));
+            pairing(&mut m);
+            sees(&mut m, 1.0, Some(phone(before, true, None)));
+            sees(&mut m, 2.0, Some(phone(before, false, None)));
+            assert_eq!(m.pairing, None);
+            assert_eq!(
+                notice(&m),
+                Some("pocket was not paired: its time to make a key is up. Pair it again.")
+            );
+        }
+        // And so when no phone is spoken of at all.
+        let mut m = shown();
+        pairing(&mut m);
+        sees(&mut m, 1.0, None);
+        assert_eq!(m.pairing, None);
+        assert!(matches!(m.notice, Some(Notice::Failed(_))));
+    }
+
+    /// The daemon keeps the passphrase while a pairing lasts, so the
+    /// window ends it when it stops showing the way in. A lock ended it
+    /// already, and a daemon that is down has none.
+    #[test]
+    fn a_pairing_ends_when_put_away_and_is_dropped_by_a_lock() {
+        let mut m = shown();
+        pairing(&mut m);
+        let (a, job) = runs(step(&mut m, Event::Forget)).remove(0);
+        assert_eq!(job, Job::StopPairing);
+        assert_eq!(m.pairing, None);
+        // Nothing waits for its answer, and nothing is said of it.
+        assert!(answer(&mut m, a, Answer::Action(Ok(Done::PairingStopped))).is_empty());
+        assert_eq!(notice(&m), None);
+        // Nothing to end.
+        assert!(step(&mut m, Event::Forget).is_empty());
+
+        pairing(&mut m);
+        hears(&mut m, 1.0, Ok(Probed::locked(true)));
+        assert_eq!(m.pairing, None);
+        assert_eq!(notice(&m), None);
+        assert_eq!(
+            m.probe,
+            Probe::Waiting {
+                due: 1.0 + PROBE_EVERY
+            }
+        );
+
+        m.conn = Conn::Up { locked: false };
+        pairing(&mut m);
+        hears(&mut m, 2.0, Err(down()));
+        assert_eq!(m.pairing, None);
+        assert_eq!(m.phone, None);
+    }
+
+    #[test]
+    fn a_pairing_refused_says_why_and_a_stale_answer_starts_none() {
+        let mut m = shown();
+        step(&mut m, Event::Ask(Change::PairPhone(pocket())));
+        let (a, _) = runs(step(&mut m, Event::Passphrase(pw()))).remove(0);
+        let way_in = Answer::Pairing(Ok(Pairing {
+            phone: pocket(),
+            url: PAGE.into(),
+        }));
+        assert!(answer(&mut m, Attempt(a.0 + 100), way_in).is_empty());
+        assert_eq!(m.pairing, None);
+        let wrong = Problem::new("wrong passphrase");
+        assert!(answer(&mut m, a, Answer::Pairing(Err(wrong.clone()))).is_empty());
+        assert_eq!(m.pairing, None);
+        assert_eq!(m.pending, Pending::None);
+        assert_eq!(m.notice, Some(Notice::Failed(wrong)));
+    }
+
+    /// The prompt for a request answered on the phone closes here without
+    /// a word, so the next probe says where it was answered. What was
+    /// answered before the window looked is not news.
+    #[test]
+    fn a_request_answered_on_the_phone_is_said_here() {
+        let mut m = shown();
+        sees(&mut m, 0.0, Some(phone(Some(100), false, Some((6, true)))));
+        assert_eq!(notice(&m), None);
+        sees(&mut m, 5.0, Some(phone(Some(100), false, Some((7, true)))));
+        assert_eq!(notice(&m), Some("Approved on pocket: widget/dev."));
+        m.notice = None;
+        sees(&mut m, 10.0, Some(phone(Some(100), false, Some((7, true)))));
+        assert_eq!(notice(&m), None);
+        sees(
+            &mut m,
+            15.0,
+            Some(phone(Some(100), false, Some((8, false)))),
+        );
+        assert_eq!(notice(&m), Some("Denied on pocket: widget/dev."));
+    }
+
+    #[test]
+    fn removing_the_phone_is_confirmed_takes_the_passphrase_and_asks_what_is_left() {
+        let mut m = shown();
+        let remove = Change::UnpairPhone("pocket".into());
+        assert!(step(&mut m, Event::Ask(remove)).is_empty());
+        let Pending::Confirm { question, .. } = &m.pending else {
+            panic!("{:?}", m.pending)
+        };
+        assert!(question.starts_with("Remove pocket?"), "{question}");
+        assert!(step(&mut m, Event::Confirm).is_empty());
+        assert_eq!(
+            m.pending,
+            Pending::Passphrase(Purpose::UnpairPhone("pocket".into()))
+        );
+        let (a, job) = runs(step(&mut m, Event::Passphrase(pw()))).remove(0);
+        assert_eq!(
+            job,
+            Job::UnpairPhone {
+                name: "pocket".into(),
+                passphrase: pw()
+            }
+        );
+        let gone = Done::PhoneUnpaired("pocket".into());
+        let after = answer(&mut m, a, Answer::Action(Ok(gone)));
+        assert!(after.iter().any(|(_, job)| *job == Job::Probe), "{after:?}");
+        assert_eq!(
+            notice(&m),
+            Some("Removed pocket: requests are approved at this computer only.")
+        );
+    }
+
+    /// Which phones could be paired is asked once at a time, again on
+    /// Refresh, and the last answer stays on show meanwhile.
+    #[test]
+    fn the_phones_that_could_be_paired_are_asked_for_and_again_on_refresh() {
+        let mut m = shown();
+        assert!(
+            !runs(step(&mut m, Event::Refresh))
+                .iter()
+                .any(|(_, job)| *job == Job::Phones)
+        );
+        let (a, job) = runs(step(&mut m, Event::CheckPhones)).remove(0);
+        assert_eq!(job, Job::Phones);
+        assert!(step(&mut m, Event::CheckPhones).is_empty());
+        let found = Ok(vec![pocket()]);
+        assert!(answer(&mut m, Attempt(a.0 + 100), Answer::Phones(found.clone())).is_empty());
+        assert_eq!(m.phones.last, None);
+        answer(&mut m, a, Answer::Phones(found.clone()));
+        assert_eq!(m.phones.last, Some(found.clone()));
+
+        let again = runs(step(&mut m, Event::Refresh));
+        let (a, _) = again
+            .into_iter()
+            .find(|(_, job)| *job == Job::Phones)
+            .unwrap();
+        assert_eq!(m.phones.last, Some(found));
+        answer(&mut m, a, Answer::Phones(Err(down())));
+        assert!(matches!(m.conn, Conn::Down(_)));
+        assert_eq!(m.phones.last, Some(Err(down())));
     }
 }

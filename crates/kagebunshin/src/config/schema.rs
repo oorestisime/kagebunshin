@@ -90,6 +90,9 @@ pub struct Config {
     /// The remote endpoint, when the store turns it on.
     #[serde(default, skip_serializing_if = "is_default_remote")]
     pub remote: RemoteConfig,
+    /// The approval page, when a phone is paired.
+    #[serde(default, skip_serializing_if = "is_default_phone")]
+    pub phone: PhoneConfig,
 }
 
 fn is_default_aws(a: &AwsSettings) -> bool {
@@ -126,6 +129,37 @@ fn default_remote_port() -> u16 {
     DEFAULT_REMOTE_PORT
 }
 
+fn is_default_phone(p: &PhoneConfig) -> bool {
+    *p == PhoneConfig::default()
+}
+
+/// The port the approval page is served on unless `[phone] port` says
+/// otherwise, on this machine's tailnet address only.
+pub const DEFAULT_PHONE_PORT: u16 = 47_318;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PhoneConfig {
+    /// The TCP port on this machine's tailnet address. Whether the page is
+    /// served at all is up to the local store, which holds the paired
+    /// phone. The port is part of the page's address, so a phone that has
+    /// the page on its home screen has to add it again after a change.
+    #[serde(default = "default_phone_port")]
+    pub port: u16,
+}
+
+impl Default for PhoneConfig {
+    fn default() -> Self {
+        Self {
+            port: DEFAULT_PHONE_PORT,
+        }
+    }
+}
+
+fn default_phone_port() -> u16 {
+    DEFAULT_PHONE_PORT
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -139,6 +173,7 @@ impl Default for Config {
             strict_memory: false,
             aws: AwsSettings::default(),
             remote: RemoteConfig::default(),
+            phone: PhoneConfig::default(),
         }
     }
 }
