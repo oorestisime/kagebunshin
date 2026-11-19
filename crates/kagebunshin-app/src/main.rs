@@ -1,7 +1,8 @@
 //! A window onto the kagebunshin daemon: each project's keys, one
 //! environment at a time, and where each comes from, the sources of each
 //! environment in order, and of the machine its providers, its remote
-//! endpoint with the grants to other machines, and the audit log. Values
+//! endpoint with the grants to other machines, the phone paired to approve
+//! requests, and the audit log. Values
 //! stay hidden: one shows only when a person reveals it with the store's
 //! passphrase, and only until it is hidden.
 //!
@@ -18,7 +19,7 @@
 //! While it runs, `run` and `get` requests for values marked sensitive
 //! wait here for approval: a dialog shows the command and its caller, and
 //! the passphrase approves that one request; without the app they are
-//! refused.
+//! refused. A phone paired here, with the passphrase, can answer them too.
 //!
 //! It runs as one process for each daemon, with an icon in the tray
 //! ([`shell`]). Closing the window leaves it there: nothing typed or
@@ -54,6 +55,7 @@ use kagebunshin::config::schema::{Profile, Region};
 use kagebunshin::config::{ConfigDir, RemoteId};
 use kagebunshin::daemon::resolve::{ACKNOWLEDGE_HINT, prod_like_profile};
 use kagebunshin::ipc::paths::{default_socket_path, ensure_private_dir, socket_dir};
+use kagebunshin::ipc::prompt::{Words, import_files, values_of};
 use kagebunshin::ipc::protocol::{
     ApprovalPrompt, ApprovalReason, Fix, GrantView, ImportInto, ImportNames, KeyStatus, Proof,
     REMOTE_TOKEN_ENV, SharedSecret, Who, WireSecret,
@@ -64,8 +66,8 @@ use kagebunshin::store::Section;
 use kagebunshin::types::{EnvName, KeyName, Origin, ProjectName, Provider};
 use rune::tok::{self, TextStyle, Theme, radius, space, type_};
 use rune::{
-    Align, AppSpec, Color, Cx, El, ScrollSpec, Shape, Span, TextEdit, Tx, Waker, canvas, col, el,
-    row, text, text_input,
+    Align, AppSpec, Color, Cx, El, Pixels, ScrollSpec, Shape, Span, TextEdit, Tx, Waker, canvas,
+    col, el, row, text, text_input,
 };
 
 use crate::catalog::{Catalog, EnvView, ProjectView, SourceView};
@@ -158,6 +160,9 @@ struct App {
     /// What the app in the tray reaches outside its window; none in
     /// scenes, tests and headless runs, nor where there is no tray.
     desk: Option<Box<dyn Desk>>,
+    /// The address a phone opens to be paired and its QR code, drawn once
+    /// for each pairing.
+    code: Option<(String, Pixels)>,
 }
 
 /// The desktop, as far as a request that waits needs it.
@@ -221,14 +226,6 @@ fn notice(prompt: &ApprovalPrompt) -> String {
     )
 }
 
-/// What a request asks a person to type: "the value of KEY", or "3 values".
-fn values_of(keys: &[KeyName]) -> String {
-    match keys {
-        [one] => format!("the value of {one}"),
-        many => format!("{} values", many.len()),
-    }
-}
-
 /// An empty, hidden field for each key `prompt` asks a person to type the
 /// value of, the first one focused; none for any other request.
 fn value_fields(prompt: Option<&ApprovalPrompt>) -> Vec<TextEdit> {
@@ -249,15 +246,6 @@ fn clear_answer(s: &mut App) {
     s.approval_passphrase.clear();
     for field in &mut s.approval_values {
         field.clear();
-    }
-}
-
-/// How many files `sections` come from, as "3 env files".
-fn import_files(sections: &[ImportNames]) -> String {
-    let files: BTreeSet<&PathBuf> = sections.iter().flat_map(|s| &s.files).collect();
-    match files.len() {
-        1 => "1 env file".to_owned(),
-        n => format!("{n} env files"),
     }
 }
 
@@ -299,6 +287,9 @@ enum View {
     /// The machine's remote endpoint: whether it listens, and the machines
     /// let in, each with a new token or revoked from here.
     Remote,
+    /// The phone that approves requests away from this computer: the one
+    /// paired, pairing one and removing it.
+    Phone,
 }
 
 /// The audit log as Activity lists it.
@@ -434,6 +425,7 @@ impl App {
             approval_left: None,
             approval_all_keys: false,
             desk: None,
+            code: None,
         }
     }
 
@@ -720,6 +712,49 @@ fn apply(s: &mut App, effects: impl IntoIterator<Item = Effect>, mut tx: Option<
         }
     }
     asking(s);
+    draw_code(s);
+}
+
+/// Draws the QR code of the pairing's address when a pairing starts, and
+/// drops it when the pairing is over.
+fn draw_code(s: &mut App) {
+    let url = s.machine.pairing.as_ref().map(|p| p.url.as_str());
+    if url == s.code.as_ref().map(|(of, _)| of.as_str()) {
+        return;
+    }
+    // An address too long for a code is still shown as text.
+    s.code = url.and_then(|url| Some((url.to_owned(), qr_code(url)?)));
+}
+
+/// `text` as a QR code, dark on white whatever the theme, which is what
+/// cameras read best, with the quiet border the standard asks for.
+fn qr_code(text: &str) -> Option<Pixels> {
+    use qrcodegen::{QrCode, QrCodeEcc};
+    /// Modules of white around the code.
+    const QUIET: usize = 4;
+    /// Pixels to a module's side: enough that scaling it keeps its edges.
+    const DOT: usize = 8;
+    let code = QrCode::encode_text(text, QrCodeEcc::Medium).ok()?;
+    let modules = usize::try_from(code.size()).ok()?;
+    let side = (modules + 2 * QUIET) * DOT;
+    let mut rgba = vec![0xff_u8; side * side * 4];
+    for y in 0..modules {
+        for x in 0..modules {
+            if !code.get_module(i32::try_from(x).ok()?, i32::try_from(y).ok()?) {
+                continue;
+            }
+            for row in 0..DOT {
+                let start = (((y + QUIET) * DOT + row) * side + (x + QUIET) * DOT) * 4;
+                for pixel in rgba[start..start + DOT * 4].as_chunks_mut::<4>().0 {
+                    pixel[..3].fill(0);
+                }
+            }
+        }
+    }
+    let side = u32::try_from(side).ok()?;
+    let pixels = Pixels::new();
+    pixels.set(side, side, rgba);
+    Some(pixels)
 }
 
 /// What the passphrase field is up for.
@@ -748,8 +783,9 @@ fn asking(s: &mut App) {
 
 /// Whether the locked screen is on show: it takes the place of a
 /// project's keys while the daemon is locked, as there are none to show.
-/// Sources, Providers, Remote and Activity need no values and stay as they are, and
-/// so does the first screen of an install with no project yet.
+/// Sources, Providers, Remote, Phone and Activity need no values and stay
+/// as they are, and so does the first screen of an install with no project
+/// yet.
 fn locked_screen(s: &App) -> bool {
     s.machine.conn == (Conn::Up { locked: true })
         && matches!(s.view, View::Keys | View::Key(_))
@@ -1006,14 +1042,19 @@ fn show(s: &mut App, project: &ProjectName, tx: Option<&mut Tx>) {
     apply(s, effects, tx);
 }
 
-/// Switches the main pane, hiding a revealed value, or a grant's new
-/// token, on the way out.
+/// Switches the main pane, hiding a revealed value or a grant's new
+/// token, and ending a phone's pairing, on the way out.
 fn go(s: &mut App, view: View, tx: &mut Tx) {
     if view != s.view && matches!(s.view, View::Key(_)) {
         send(s, Event::Conceal, Some(tx));
     }
-    if view != s.view && s.view == View::Remote {
+    if view != s.view && matches!(s.view, View::Remote | View::Phone) {
         send(s, Event::Forget, Some(tx));
+    }
+    if view == View::Phone {
+        send(s, Event::CheckPhones, Some(tx));
+        // What is said of the phone is no older than the look at it.
+        send(s, Event::Probe, Some(tx));
     }
     if view == View::Activity && s.live {
         s.activity = activity();
@@ -1208,44 +1249,6 @@ fn overlay_wide(dialog: El, width: f32, dismiss: fn(&mut App, &mut Tx)) -> El {
 
 /// How many keys an approval prompt shows before "N more".
 const SHOWN_KEYS: usize = 12;
-
-/// The shells whose `-c SCRIPT` a prompt shows as the command.
-const SHELLS: [&str; 6] = ["sh", "bash", "zsh", "dash", "ksh", "fish"];
-
-/// The coding agents a prompt names when one is among the processes a
-/// caller descends from: the process's name, and what to call it.
-const AGENTS: [(&str, &str); 9] = [
-    ("claude", "Claude Code"),
-    ("opencode", "OpenCode"),
-    ("codex", "Codex"),
-    ("cursor-agent", "Cursor"),
-    ("gemini", "Gemini CLI"),
-    ("aider", "Aider"),
-    ("amp", "Amp"),
-    ("goose", "Goose"),
-    ("copilot", "GitHub Copilot"),
-];
-
-/// The script of a command that hands one to a shell (`sh -c SCRIPT`,
-/// `bash -lc SCRIPT`), with the shell as it was called and what follows
-/// the script: the script is what runs, so it is what a person reads.
-fn shell_script(argv: &[String]) -> Option<(String, &str, &[String])> {
-    let (program, rest) = argv.split_first()?;
-    let name = std::path::Path::new(program).file_name()?.to_str()?;
-    if !SHELLS.contains(&name) {
-        return None;
-    }
-    // Options only before `-c` or a bundle ending in it, such as `-lc`.
-    let at = rest
-        .iter()
-        .position(|a| !a.starts_with('-') || a.ends_with('c'))?;
-    let flag = &rest[at];
-    if !flag.starts_with('-') || flag.starts_with("--") {
-        return None;
-    }
-    let script = rest.get(at + 1)?;
-    Some((format!("{name} {flag}"), script, &rest[at + 2..]))
-}
 
 /// Colours for reading a command line or a shell script: the word in
 /// command position bold, options, quoted words and operators each in a
@@ -1486,7 +1489,6 @@ fn value_list(p: Paint, s: &App, keys: &[KeyName], replaces: &[KeyName]) -> El {
 /// store, what it writes in place of the keys it wants; for values to
 /// type into it, a field for each.
 fn approval_prompt(p: Paint, s: &App, prompt: &ApprovalPrompt) -> El {
-    let of = format!("{}/{}", prompt.project, prompt.env);
     let import = match &prompt.reason {
         ApprovalReason::Import { sections, unlock } => Some((sections, *unlock)),
         _ => None,
@@ -1498,75 +1500,20 @@ fn approval_prompt(p: Paint, s: &App, prompt: &ApprovalPrompt) -> El {
     // Nothing is approved without the passphrase: the button is dimmed
     // until one is typed. Enter in a field still leads to it.
     let ready = !s.answering && !s.approval_passphrase.text.is_empty();
-    let (asks_for, why) = match &prompt.reason {
-        // Why is what the line above the passphrase says: not said twice.
-        ApprovalReason::Import { sections, .. } => (
-            format!("to import {} into the local store", import_files(sections)),
-            String::new(),
-        ),
-        ApprovalReason::Type { .. } => (
-            format!("you to type {} for {of}", values_of(&prompt.keys)),
-            String::new(),
-        ),
-        ApprovalReason::Keys => (
-            format!("sensitive values of {of}"),
-            // A secret's mark holds in every environment that reads it.
-            match prompt.secrets.as_slice() {
-                [] => format!(
-                    "These values are marked sensitive one by one. {of} itself is not marked."
-                ),
-                [one] => format!(
-                    "Secret {one} is marked sensitive wherever it is read. {of} itself is \
-                     not marked."
-                ),
-                many => format!(
-                    "Secrets {} are marked sensitive wherever they are read. {of} itself is \
-                     not marked.",
-                    many.iter()
-                        .map(ToString::to_string)
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-            },
-        ),
-        ApprovalReason::Marked => (
-            format!("{of}, marked sensitive"),
-            format!("{of} is marked sensitive: every value it sets takes a person's approval."),
-        ),
-        ApprovalReason::Waiting { why } => (
-            format!("{of}, which looks like production"),
-            format!(
-                "{of} looks like production ({why}) and nobody has decided whether it is. \
-                 Approving does not decide that: do it afterwards on the Projects page, in \
-                 \u{201c}waits for your decision\u{201d}."
-            ),
-        ),
-    };
-    // Another machine's command line and folder are only what it says;
-    // tailscaled vouches for the machine and user, nothing more.
-    let title = match &prompt.remote {
-        _ if import.is_some() || typing.is_some() => format!("A command asks {asks_for}"),
-        Some(r) => format!("Machine {} asks for {asks_for}", r.machine),
-        None => format!("A command asks for {asks_for}"),
-    };
-    let reported = if prompt.remote.is_some() {
-        " (as the remote machine reports it)"
-    } else {
-        ""
-    };
-
-    // The command: a script handed to a shell is shown as the script.
-    let (command_label, shown) = match shell_script(&prompt.argv) {
-        Some((shell, script, [])) => (format!("Script, run by {shell}{reported}"), script),
-        Some((shell, script, more)) => (
-            format!(
-                "Script, run by {shell} with the arguments {}{reported}",
-                more.join(" ")
-            ),
-            script,
-        ),
-        None => (format!("Command{reported}"), prompt.command.as_str()),
-    };
+    // What it says is the phone's page's too: see `Words`.
+    let Words {
+        title,
+        command_label,
+        command: shown,
+        wants,
+        asked_label,
+        who,
+        place,
+        detail,
+        why,
+        trust,
+    } = Words::of(prompt);
+    let shown = shown.as_str();
     let command = col()
         .w_full()
         .max_h(132.0)
@@ -1587,43 +1534,7 @@ fn approval_prompt(p: Paint, s: &App, prompt: &ApprovalPrompt) -> El {
                 .wrap(),
         );
 
-    // The keys. For a whole environment the daemon has not read it yet:
-    // they are the ones the command expects (the checkout's .env.example,
-    // or the one asked for), not ones known to be set. With no
-    // .env.example it gets every key: those the daemon knows of, if any.
     let n = prompt.keys.len();
-    const UNLISTED: &str = "no .env.example here lists the ones it needs";
-    let wants = match (&prompt.reason, n) {
-        (ApprovalReason::Import { sections, .. }, _) => {
-            let keys: usize = sections.iter().map(|s| s.keys.len()).sum();
-            format!(
-                "Writes {keys} {}, by name; the values are read from the files",
-                if keys == 1 { "key" } else { "keys" }
-            )
-        }
-        // Locked, the daemon cannot say which keys have a value now.
-        (ApprovalReason::Type { unlock, .. }, n) => format!(
-            "{}{}",
-            if n == 1 {
-                "Type its value, on one line"
-            } else {
-                "Type the values, one line each. A key left empty stays as it is"
-            },
-            if *unlock {
-                ". One that has a value now gets the new one"
-            } else {
-                ""
-            }
-        ),
-        (ApprovalReason::Keys, 1) => "Wants 1 value marked sensitive".to_owned(),
-        (ApprovalReason::Keys, n) => format!("Wants {n} values marked sensitive"),
-        (_, 0) if prompt.every_key => format!("Wants every key {of} sets: {UNLISTED}"),
-        (_, 1) if prompt.every_key => format!("Wants the one key {of} sets: {UNLISTED}"),
-        (_, n) if prompt.every_key => format!("Wants all {n} keys {of} sets: {UNLISTED}"),
-        (_, 0) => format!("Wants every value {of} sets"),
-        (_, 1) => format!("Wants every value {of} sets. It expects this key"),
-        (_, n) => format!("Wants every value {of} sets. It expects these {n} keys"),
-    };
     let all = s.approval_all_keys || n <= SHOWN_KEYS;
     let mut chips = row().w_full().flex_wrap().gap(space::S1).children(
         prompt
@@ -1646,43 +1557,6 @@ fn approval_prompt(p: Paint, s: &App, prompt: &ApprovalPrompt) -> El {
         );
     }
 
-    // Who asks, in one line, and under it, small, how the request got
-    // here. Process names are what the processes call themselves, which
-    // the label says.
-    let agent = prompt
-        .parents
-        .iter()
-        .find_map(|name| AGENTS.iter().find(|(process, _)| process == name))
-        .map(|(_, agent)| *agent);
-    let (who, place, detail, asked_label) = if let Some(r) = &prompt.remote {
-        let mut detail = format!("in {} there, as it reports", prompt.cwd.display());
-        if !r.tags.is_empty() {
-            detail.push_str(&format!(" \u{00b7} tags {}", r.tags.join(", ")));
-        }
-        (
-            format!("Machine {}", r.machine),
-            format!(", user {}", r.user),
-            detail,
-            "Asked by",
-        )
-    } else {
-        let pid = format!("pid {}", prompt.pid);
-        let chain: Vec<&str> = prompt.parents.iter().rev().map(String::as_str).collect();
-        (
-            agent.unwrap_or("A process").to_owned(),
-            format!(" in {}", prompt.cwd.display()),
-            if chain.is_empty() {
-                pid
-            } else {
-                format!("{} \u{00b7} {pid}", chain.join(" \u{203a} "))
-            },
-            if chain.is_empty() {
-                "Asked by"
-            } else {
-                "Asked by (names as the processes give them)"
-            },
-        )
-    };
     let asked_by = col()
         .w_full()
         .gap(2.0)
@@ -1779,34 +1653,11 @@ fn approval_prompt(p: Paint, s: &App, prompt: &ApprovalPrompt) -> El {
         .child(head)
         .child(details)
         .child(
-            text(match (import, typing) {
-                (Some((_, true)), _) => {
-                    "Approving writes these values to the local store, which takes its \
-                     passphrase, and unlocks kagebunshin. The files stay where they are. It \
-                     covers this one request."
-                }
-                (Some((_, false)), _) => {
-                    "Approving writes these values to the local store, which takes its \
-                     passphrase. The files stay where they are. It covers this one request."
-                }
-                (None, Some((_, true))) => {
-                    "Saving writes what you typed to the local store, which takes its \
-                     passphrase, and unlocks kagebunshin. The command is told which keys were \
-                     set, never a value."
-                }
-                (None, Some((_, false))) => {
-                    "Saving writes what you typed to the local store, which takes its \
-                     passphrase. The command is told which keys were set, never a value."
-                }
-                (None, None) => {
-                    "Approving trusts this command: it gets the values and can print, save or \
-                     send them anywhere. It covers this one request."
-                }
-            })
-            .key("kb-approval-trust")
-            .font(BODY)
-            .color(p.warn)
-            .wrap(),
+            text(trust)
+                .key("kb-approval-trust")
+                .font(BODY)
+                .color(p.warn)
+                .wrap(),
         );
     if let Some(error) = &s.approval_error {
         d = d.child(
@@ -2337,6 +2188,8 @@ fn passphrase_prompt(p: Paint, purpose: &Purpose, edit: &TextEdit) -> El {
             ),
             "Revoke",
         ),
+        Purpose::PairPhone(phone) => (format!("to let {} approve requests", phone.name), "Pair"),
+        Purpose::UnpairPhone(name) => (format!("to remove {name}, the paired phone"), "Remove"),
     };
     card(p)
         .key("kb-passphrase")
@@ -2627,9 +2480,13 @@ fn machine_row(p: Paint, key: &str, label: &str, to: View, on: bool) -> El {
 }
 
 /// The projects, and under them what is the machine's and no project's:
-/// its providers, the machines let in remotely and its audit log.
+/// its providers, the machines let in remotely, the phone that approves
+/// and its audit log.
 fn sidebar(p: Paint, s: &App) -> El {
-    let of_machine = matches!(s.view, View::Activity | View::Providers | View::Remote);
+    let of_machine = matches!(
+        s.view,
+        View::Activity | View::Providers | View::Remote | View::Phone
+    );
     // A project is the one on show only while something of it is.
     let shown = s.machine.shown.as_ref().map(|sh| &sh.project);
     let shown = shown.filter(|_| !of_machine);
@@ -2652,6 +2509,13 @@ fn sidebar(p: Paint, s: &App) -> El {
             "Remote agents",
             View::Remote,
             s.view == View::Remote,
+        ))
+        .child(machine_row(
+            p,
+            "kb-nav-phone",
+            "Phone",
+            View::Phone,
+            s.view == View::Phone,
         ))
         .child(machine_row(
             p,
@@ -2765,7 +2629,10 @@ fn main_pane(p: Paint, s: &App) -> El {
         None => {}
     }
     let shown = s.machine.shown.as_ref();
-    let of_project = !matches!(s.view, View::Activity | View::Providers | View::Remote);
+    let of_project = !matches!(
+        s.view,
+        View::Activity | View::Providers | View::Remote | View::Phone
+    );
     if let Some(shown) = shown
         && of_project
         && !locked
@@ -2786,6 +2653,7 @@ fn main_pane(p: Paint, s: &App) -> El {
         (View::Activity, _) => body.child(activity_view(p, s)),
         (View::Providers, _) => body.child(providers_view(p, s)),
         (View::Remote, _) => body.child(remote_view(p, s)),
+        (View::Phone, _) => body.child(phone_view(p, s)),
         (_, None) => body.child(
             text("Pick a project.")
                 .key("kb-pick")
@@ -5064,6 +4932,261 @@ fn grant_row(p: Paint, i: usize, g: &GrantView, now: u64, idle: bool) -> El {
     r
 }
 
+/// A length of time left, in the unit that says it shortest.
+fn time_left(seconds: u64) -> String {
+    match seconds {
+        s if s < 60 => format!("{s} s"),
+        s => format!("{} min", s.div_ceil(60)),
+    }
+}
+
+/// Phone: the phone that approves requests away from this computer, the
+/// way in for one being paired, and the phones on the tailnet that could
+/// be.
+fn phone_view(p: Paint, s: &App) -> El {
+    let mut out = col()
+        .key("kb-phone")
+        .max_w(PAGE)
+        .gap(space::S3)
+        .child(
+            text("Phone")
+                .key("kb-title")
+                .font(TITLE)
+                .color(p.t.text),
+        )
+        .child(
+            text("A phone on your tailnet can approve requests while you are away from this computer. This machine serves it a page that no other device is given, and the phone approves one request at a time with a passkey, which asks for your face or fingerprint. Unlocking, and anything that is typed, stay at this computer.")
+                .font(BODY)
+                .color(p.t.text_secondary)
+                .wrap(),
+        );
+    let note = |msg: &str| text(msg).font(BODY).color(p.t.text_secondary).wrap();
+    let status = s.machine.phone.as_deref();
+    let paired = status.and_then(|st| st.paired.as_ref());
+    let pairing = s.machine.pairing.as_ref();
+    // One change at a time, and none while a phone is on its way in.
+    let idle = s.machine.pending == Pending::None && pairing.is_none();
+
+    let mut now = card(p)
+        .key("kb-phone-paired")
+        .child(heading(p, "Paired phone"));
+    match (&s.machine.conn, paired) {
+        (Conn::Up { locked: true }, _) => {
+            now = now.child(note("The paired phone shows once the daemon is unlocked."));
+        }
+        (Conn::Up { locked: false }, None) => {
+            now = now.child(note(
+                "No phone is paired: requests are approved at this computer only.",
+            ));
+        }
+        (_, None) => now = now.child(note("Not known yet.")),
+        (_, Some(phone)) => {
+            let name = phone.name.clone();
+            now = now.child(
+                row()
+                    .w_full()
+                    .gap(space::S2)
+                    .center_y()
+                    .child(text(&phone.name).font(BODY.mono()).color(p.t.text))
+                    .child(
+                        text(format!("paired {}", kagebunshin::audit::utc(phone.paired)))
+                            .font(BODY)
+                            .color(p.t.text_secondary)
+                            .truncate()
+                            .grow(1.0),
+                    )
+                    .child(button(
+                        p,
+                        "kb-phone-remove",
+                        "Remove",
+                        idle,
+                        move |s, tx| {
+                            ask(s, Change::UnpairPhone(name.clone()), tx);
+                        },
+                    )),
+            );
+            let page = |label: &str, color, detail: Option<&str>| {
+                let mut r = row().w_full().gap(space::S2).center_y().child(badge(
+                    "kb-phone-page",
+                    label,
+                    color,
+                ));
+                if let Some(detail) = detail {
+                    r = r.child(
+                        text(detail)
+                            .font(BODY.mono())
+                            .color(p.t.text)
+                            .selectable(true)
+                            .truncate()
+                            .grow(1.0),
+                    );
+                }
+                r
+            };
+            let (url, problem) = status.map_or((None, None), |st| {
+                (st.url.as_deref(), st.problem.as_deref())
+            });
+            now = match (url, problem) {
+                (Some(url), _) => now.child(page("page served", p.good, Some(url))),
+                (None, Some(problem)) => now
+                    .child(page("page not served", p.warn, None))
+                    .child(note(problem)),
+                (None, None) => now.child(page("page not served yet", p.info, None)),
+            };
+            let last = status.and_then(|st| st.last.as_ref());
+            now = now.child(note(&match (last, phone.seen) {
+                (Some(last), _) => format!(
+                    "Last answered there: {} {}/{} at {}.",
+                    if last.approved { "approved" } else { "denied" },
+                    last.project,
+                    last.env,
+                    kagebunshin::audit::utc(last.time)
+                ),
+                (None, Some(seen)) => format!(
+                    "It last opened the page at {}, and has answered nothing since the daemon started.",
+                    kagebunshin::audit::utc(seen)
+                ),
+                (None, None) => "It has not opened the page since the daemon started.".to_owned(),
+            }));
+        }
+    }
+    out = out.child(now);
+
+    if let Some(pairing) = pairing {
+        let left = status
+            .and_then(|st| st.pairing.as_ref())
+            .map(|going| going.left);
+        let copied = pairing.url.clone();
+        let mut steps = col().gap(space::S2).grow(1.0).shrink().child(
+            text(format!(
+                "On {}, point the camera at this code, or open the address, and make the approval key there.",
+                pairing.phone.name
+            ))
+            .font(BODY)
+            .color(p.t.text)
+            .wrap(),
+        );
+        steps = steps
+            .child(
+                text(&pairing.url)
+                    .key("kb-pairing-url")
+                    .font(BODY.mono())
+                    .color(p.t.text)
+                    .selectable(true)
+                    .truncate(),
+            )
+            .child(note(&match left {
+                Some(left) => format!(
+                    "No other device is given the page. It waits {} more, and stops when this view is left.",
+                    time_left(left)
+                ),
+                None => "No other device is given the page. It stops when this view is left."
+                    .to_owned(),
+            }))
+            .child(
+                row()
+                    .gap(space::S2)
+                    .child(button(p, "kb-pairing-copy", "Copy", true, move |_, tx| {
+                        tx.copy(copied.clone());
+                    }))
+                    .child(button(p, "kb-pairing-stop", "Stop", true, |s, tx| {
+                        send(s, Event::Forget, Some(tx));
+                    })),
+            );
+        let mut body = row().w_full().gap(space::S3);
+        if let Some((_, code)) = &s.code {
+            body = body.child(
+                el().key("kb-pairing-code")
+                    .label("QR code of the address")
+                    .size(184.0, 184.0)
+                    .radius(radius::MD)
+                    .pixels(code),
+            );
+        }
+        out = out.child(
+            card(p)
+                .key("kb-pairing")
+                .border(p.hair, p.good)
+                .child(heading(p, &format!("Pairing {}", pairing.phone.name)))
+                .child(body.child(steps)),
+        );
+        return out;
+    }
+
+    let mut choices = card(p).key("kb-phones").child(heading(
+        p,
+        if paired.is_some() {
+            "Pair another phone"
+        } else {
+            "Pair a phone"
+        },
+    ));
+    if let Some(going) = status.and_then(|st| st.pairing.as_ref()) {
+        // Started from another window of this daemon.
+        choices = choices.child(note(&format!(
+            "{} is being paired, for {} more.",
+            going.name,
+            time_left(going.left)
+        )));
+    }
+    match (&s.machine.conn, &s.machine.phones.last) {
+        (Conn::Up { locked: true }, _) => {
+            choices = choices.child(note("A phone is paired once the daemon is unlocked."));
+        }
+        (_, None) => {
+            choices = choices.child(note("Asking Tailscale which phones are on this tailnet…"));
+        }
+        (_, Some(Err(problem))) => {
+            choices = choices.child(text(&problem.message).font(BODY).color(p.t.text).wrap());
+            if let Some(hint) = &problem.hint {
+                choices = choices.child(note(&format!("hint: {hint}")));
+            }
+        }
+        (_, Some(Ok(phones))) if phones.is_empty() => {
+            choices = choices.child(note(
+                "No phone or tablet is on this tailnet. Install Tailscale on the phone, sign it in to this tailnet, then press Refresh.",
+            ));
+        }
+        (_, Some(Ok(phones))) => {
+            if paired.is_some() {
+                choices = choices.child(note(
+                    "One phone approves at a time: the one paired now does until the new one has made its key.",
+                ));
+            }
+            for (i, phone) in phones.iter().enumerate() {
+                let key = format!("kb-phone-{i}");
+                let choice = phone.clone();
+                let again = paired.is_some_and(|now| now.node == phone.node);
+                choices = choices.child(
+                    row()
+                        .key(key.clone())
+                        .w_full()
+                        .gap(space::S2)
+                        .center_y()
+                        .child(text(&phone.name).font(BODY.mono()).color(p.t.text))
+                        .child(
+                            text(&phone.os)
+                                .font(BODY)
+                                .color(p.t.text_secondary)
+                                .truncate()
+                                .grow(1.0),
+                        )
+                        .child(button(
+                            p,
+                            &format!("{key}-pair"),
+                            if again { "Pair again" } else { "Pair" },
+                            idle,
+                            move |s, tx| {
+                                ask(s, Change::PairPhone(choice.clone()), tx);
+                            },
+                        )),
+                );
+            }
+        }
+    }
+    out.child(choices)
+}
+
 /// One provider: what it is, then its parts under their own headings.
 fn provider_card(p: Paint, s: &App, provider: Provider, statuses: &[ProviderStatus]) -> El {
     let id = provider.as_str();
@@ -5638,13 +5761,16 @@ fn source_row(p: Paint, i: usize, s: &SourceView) -> El {
 )]
 mod scenes {
     use kagebunshin::daemon::resolve::waiting_message;
-    use kagebunshin::ipc::protocol::{Facts, KeyStatus, RemoteStatus, VarStatus, WaitingEnv};
+    use kagebunshin::ipc::protocol::{
+        Facts, KeyStatus, PhoneAnswer, PhoneChoice, PhonePairingView, PhoneStatus, PhoneView,
+        RemoteStatus, VarStatus, WaitingEnv,
+    };
     use kagebunshin::types::Provider;
 
     use super::*;
     use crate::catalog::{Here, ProjectView};
-    use crate::daemon::NewToken;
-    use crate::machine::Revealed;
+    use crate::daemon::{NewToken, Pairing};
+    use crate::machine::{Phones, Revealed};
 
     pub fn catalog() -> Catalog {
         let source = |provider, select, locations: &[&str]| SourceView {
@@ -6324,6 +6450,74 @@ mod scenes {
         });
     }
 
+    /// The approval page's address in every scene.
+    pub const PAGE_URL: &str = "https://self.example.ts.net:47318";
+
+    fn phone_choice(name: &str, os: &str) -> PhoneChoice {
+        PhoneChoice {
+            name: name.into(),
+            node: format!("n{name}"),
+            os: os.into(),
+        }
+    }
+
+    /// Phone: none paired, and the tailnet's two that could be.
+    pub fn phone_none(s: &mut App) {
+        unlocked(s);
+        s.view = View::Phone;
+        s.machine.phones = Phones {
+            asked: true,
+            asking: None,
+            last: Some(Ok(vec![
+                phone_choice("pocket", "iOS"),
+                phone_choice("tablet", "android"),
+            ])),
+        };
+    }
+
+    /// Phone: one paired, its page served, and a request answered there.
+    pub fn phone(s: &mut App) {
+        phone_none(s);
+        s.machine.phone = Some(Box::new(PhoneStatus {
+            paired: Some(PhoneView {
+                name: "pocket".into(),
+                node: "npocket".into(),
+                paired: 1_795_046_400,
+                seen: Some(1_795_100_000),
+            }),
+            url: Some(PAGE_URL.into()),
+            problem: None,
+            pairing: None,
+            last: Some(PhoneAnswer {
+                id: 7,
+                project: "widget".parse().unwrap(),
+                env: "dev".parse().unwrap(),
+                approved: true,
+                time: 1_795_100_060,
+            }),
+        }));
+    }
+
+    /// Phone: one on its way in, with the code it scans.
+    pub fn phone_pairing(s: &mut App) {
+        phone_none(s);
+        s.machine.phone = Some(Box::new(PhoneStatus {
+            paired: None,
+            url: Some(PAGE_URL.into()),
+            problem: None,
+            pairing: Some(PhonePairingView {
+                name: "pocket".into(),
+                left: 540,
+            }),
+            last: None,
+        }));
+        s.machine.pairing = Some(Pairing {
+            phone: phone_choice("pocket", "iOS"),
+            url: PAGE_URL.into(),
+        });
+        draw_code(s);
+    }
+
     /// Providers being asked about again: each says so by its last answer.
     pub fn providers_checking(s: &mut App) {
         providers(s);
@@ -6856,6 +7050,9 @@ mod scenes {
         ("providers-checking", providers_checking),
         ("remote", remote),
         ("remote-token", remote_token),
+        ("phone", phone),
+        ("phone-none", phone_none),
+        ("phone-pairing", phone_pairing),
         ("proton", proton),
         ("approval", approval),
         ("approval-proton", approval_proton),
@@ -7040,9 +7237,13 @@ mod tests {
     }
 
     fn live(scene: fn(&mut App), fake: &FakeClient) -> Runtime<App> {
+        live_on(scene, Box::new(fake.clone()))
+    }
+
+    fn live_on(scene: fn(&mut App), daemon: Box<dyn crate::daemon::DaemonClient>) -> Runtime<App> {
         let mut s = fixed(scene);
         let waker: Waker = Arc::new(|| {});
-        s.worker = Some(Worker::spawn(Box::new(fake.clone()), waker).unwrap());
+        s.worker = Some(Worker::spawn(daemon, waker).unwrap());
         let mut rt = Runtime::new(s, view, TALL, Env::new(true, 2.0));
         rt.poll = Some(poll);
         rt.frame(0.0);
@@ -7059,6 +7260,7 @@ mod tests {
             acknowledged: Vec::new(),
             shared: Vec::new(),
             app: false,
+            phone: None,
         })
     }
 
@@ -8324,32 +8526,9 @@ mod tests {
     }
 
     /// A script handed to a shell is the command a person reads, with the
-    /// shell named beside it; anything else is shown as it was run.
+    /// shell named beside it.
     #[test]
     fn a_script_handed_to_a_shell_is_shown_as_the_command() {
-        let argv = |words: &[&str]| words.iter().map(|w| (*w).to_owned()).collect::<Vec<_>>();
-        let script = |words: &[&str]| {
-            let argv = argv(words);
-            shell_script(&argv).map(|(shell, script, more)| (shell, script.to_owned(), more.len()))
-        };
-        assert_eq!(
-            script(&["/bin/bash", "-lc", "make deploy"]),
-            Some(("bash -lc".into(), "make deploy".into(), 0))
-        );
-        assert_eq!(
-            script(&["sh", "-e", "-c", "echo $0", "name"]),
-            Some(("sh -c".into(), "echo $0".into(), 1))
-        );
-        for not_a_script in [
-            &["bash", "deploy.sh", "-c"][..],
-            &["bash", "-c"],
-            &["bash", "--rcfile", "x"],
-            &["npm", "-c", "x"],
-            &[],
-        ] {
-            assert_eq!(script(not_a_script), None, "{not_a_script:?}");
-        }
-
         let rt = runtime(fixed(scenes::approval_script));
         let all = texts(&rt);
         assert!(all.contains("Script, run by bash -lc"), "{all}");
@@ -8779,6 +8958,7 @@ mod tests {
             acknowledged: Vec::new(),
             shared: scenes::shared(),
             app: false,
+            phone: None,
         })));
         let mut rt = live(scenes::waiting, &fake);
         until(&mut rt, |s| !s.machine.shared.is_empty());
@@ -8855,6 +9035,7 @@ mod tests {
             acknowledged: Vec::new(),
             shared: scenes::marked(),
             app: false,
+            phone: None,
         })));
         let mut rt = live(scenes::waiting, &fake);
         until(&mut rt, |s| !s.machine.shared.is_empty());
@@ -9443,5 +9624,323 @@ mod tests {
             )),
             "{asked:?}"
         );
+    }
+
+    #[test]
+    fn phone_shows_the_paired_phone_and_those_that_could_be() {
+        let rt = runtime(fixed(scenes::phone));
+        let all = texts(&rt);
+        for shown in [
+            "Paired phone",
+            "pocket",
+            "paired 2026-11-19 00:00:00Z",
+            "page served",
+            scenes::PAGE_URL,
+            "Last answered there: approved widget/dev at 2026-11-19 14:54:20Z.",
+            "Pair another phone",
+            "One phone approves at a time: the one paired now does until the new one has made its key.",
+            "tablet",
+            "android",
+            "Pair again",
+        ] {
+            assert!(all.contains(shown), "{shown}: {all}");
+        }
+        assert!(rt.find("kb-phone-remove").is_some());
+        assert!(rt.find("kb-pairing").is_none());
+
+        // None paired: nothing to remove, and each phone can be.
+        let rt = runtime(fixed(scenes::phone_none));
+        let all = texts(&rt);
+        assert!(
+            all.contains("No phone is paired: requests are approved at this computer only."),
+            "{all}"
+        );
+        assert!(all.contains("Pair a phone"), "{all}");
+        assert!(!all.contains("Pair again"), "{all}");
+        assert!(rt.find("kb-phone-remove").is_none());
+        assert!(rt.find("kb-phone-0-pair").is_some());
+        assert!(rt.find("kb-phone-1-pair").is_some());
+
+        // One on its way in: its code and address, and no other to pick.
+        let rt = runtime(fixed(scenes::phone_pairing));
+        let all = texts(&rt);
+        for shown in [
+            "Pairing pocket",
+            scenes::PAGE_URL,
+            "QR code of the address",
+            "It waits 9 min more, and stops when this view is left.",
+        ] {
+            assert!(all.contains(shown), "{shown}: {all}");
+        }
+        assert!(rt.find("kb-pairing-code").is_some());
+        assert!(rt.find("kb-phones").is_none());
+
+        // The page is not served: it says why, or that it is not yet.
+        let mut s = fixed(scenes::phone);
+        let status = s.machine.phone.as_mut().unwrap();
+        status.url = None;
+        status.last = None;
+        let all = texts(&runtime(s));
+        assert!(all.contains("page not served yet"), "{all}");
+        assert!(
+            all.contains(
+                "It last opened the page at 2026-11-19 14:53:20Z, and has answered nothing since the daemon started."
+            ),
+            "{all}"
+        );
+        let mut s = fixed(scenes::phone);
+        let status = s.machine.phone.as_mut().unwrap();
+        status.url = None;
+        status.problem = Some("Tailscale is not running".into());
+        let all = texts(&runtime(s));
+        assert!(all.contains("page not served"), "{all}");
+        assert!(all.contains("Tailscale is not running"), "{all}");
+
+        // Tailscale knows of no phone, or could not be asked.
+        let mut s = fixed(scenes::phone_none);
+        s.machine.phones.last = Some(Ok(Vec::new()));
+        let all = texts(&runtime(s));
+        assert!(
+            all.contains("No phone or tablet is on this tailnet."),
+            "{all}"
+        );
+        let mut s = fixed(scenes::phone_none);
+        s.machine.phones.last = Some(Err(Problem {
+            hint: Some("start Tailscale".into()),
+            ..Problem::new("Tailscale is not running")
+        }));
+        let all = texts(&runtime(s));
+        assert!(all.contains("Tailscale is not running"), "{all}");
+        assert!(all.contains("hint: start Tailscale"), "{all}");
+
+        // Locked, the daemon cannot read which phone is paired.
+        let mut s = fixed(scenes::phone);
+        s.machine.conn = Conn::Up { locked: true };
+        s.machine.phone = None;
+        let rt = runtime(s);
+        let all = texts(&rt);
+        assert!(
+            all.contains("The paired phone shows once the daemon is unlocked."),
+            "{all}"
+        );
+        assert!(
+            all.contains("A phone is paired once the daemon is unlocked."),
+            "{all}"
+        );
+        assert!(rt.find("kb-phone-0-pair").is_none());
+    }
+
+    /// A daemon as far as the phone goes: it answers by what it is asked,
+    /// since a pairing is probed for every second.
+    #[derive(Clone, Default)]
+    struct PhoneDaemon {
+        /// Whether pocket is paired, and whether one is being paired.
+        state: Arc<std::sync::Mutex<(bool, bool)>>,
+        asked: Arc<std::sync::Mutex<Vec<Request>>>,
+    }
+
+    impl PhoneDaemon {
+        fn paired() -> Self {
+            let daemon = Self::default();
+            daemon.state.lock().unwrap().0 = true;
+            daemon
+        }
+
+        fn asked(&self, what: impl Fn(&Request) -> bool) -> usize {
+            self.asked
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|r| what(r))
+                .count()
+        }
+    }
+
+    impl crate::daemon::DaemonClient for PhoneDaemon {
+        fn request(&mut self, req: Request) -> Result<Response, ClientError> {
+            let mut state = self.state.lock().unwrap();
+            let store = |change| Response::Store {
+                change,
+                locked: false,
+            };
+            let reply = match &req {
+                Request::Status { .. } => {
+                    let Response::Status(report) = up(false) else {
+                        unreachable!()
+                    };
+                    let mut phone = fixed(scenes::phone_pairing).machine.phone.unwrap();
+                    phone.paired = fixed(scenes::phone)
+                        .machine
+                        .phone
+                        .and_then(|p| p.paired)
+                        .filter(|_| state.0);
+                    if !state.1 {
+                        phone.pairing = None;
+                    }
+                    // It says nothing of a phone when there is none.
+                    let phone = (state.0 || state.1).then_some(phone);
+                    Response::Status(StatusReport { phone, ..report })
+                }
+                Request::Phones => {
+                    let phones = fixed(scenes::phone_none).machine.phones.last;
+                    Response::Phones {
+                        phones: phones.unwrap().unwrap(),
+                    }
+                }
+                Request::PhonePair { .. } => {
+                    state.1 = true;
+                    Response::PhonePairing {
+                        name: "pocket".into(),
+                        url: scenes::PAGE_URL.into(),
+                        seconds: 600,
+                    }
+                }
+                Request::PhonePairStop => {
+                    state.1 = false;
+                    Response::PhonePairStopped
+                }
+                Request::PhoneUnpair { .. } => {
+                    state.0 = false;
+                    store(kagebunshin::store::Change::Removed)
+                }
+                _ => {
+                    return Err(ClientError::NotRunning {
+                        socket: "/fake/kagebunshind.sock".into(),
+                    });
+                }
+            };
+            self.asked.lock().unwrap().push(req);
+            Ok(reply)
+        }
+    }
+
+    /// A phone is paired from its row with the passphrase and no question
+    /// first. The way in shows until the phone is in, and is ended when it
+    /// is stopped, the view is left or the window closes: the daemon keeps
+    /// the passphrase for as long as it lasts.
+    #[test]
+    fn a_phone_is_paired_from_its_row_and_its_way_in_ends_when_put_away() {
+        let daemon = PhoneDaemon::default();
+        let stops = |daemon: &PhoneDaemon| daemon.asked(|r| *r == Request::PhonePairStop);
+        let mut rt = live_on(scenes::phone_none, Box::new(daemon.clone()));
+        until(&mut rt, |s| s.machine.conn == Conn::Up { locked: false });
+        rt.frame(0.1);
+        let pair = |rt: &mut Runtime<App>| {
+            click(rt, "kb-phone-0-pair");
+            assert!(rt.find("kb-confirm").is_none());
+            let all = texts(rt);
+            assert!(all.contains("to let pocket approve requests"), "{all}");
+            rt.paste("pw");
+            rt.frame(0.6);
+            click(rt, "kb-passphrase-ok");
+            until(rt, |s| {
+                s.machine.pairing.is_some()
+                    && s.machine
+                        .phone
+                        .as_ref()
+                        .is_some_and(|p| p.pairing.is_some())
+            });
+            rt.frame(0.7);
+        };
+
+        pair(&mut rt);
+        let all = texts(&rt);
+        for shown in [
+            "Pairing pocket",
+            scenes::PAGE_URL,
+            "It waits 9 min more, and stops when this view is left.",
+        ] {
+            assert!(all.contains(shown), "{shown}: {all}");
+        }
+        assert!(rt.find("kb-pairing-code").is_some());
+        assert!(rt.find("kb-phones").is_none());
+        assert_eq!(
+            daemon.asked(|r| matches!(
+                r,
+                Request::PhonePair { machine, passphrase }
+                    if machine == "npocket" && passphrase.expose() == "pw"
+            )),
+            1
+        );
+
+        click(&mut rt, "kb-pairing-stop");
+        assert_eq!(rt.state.machine.pairing, None);
+        assert!(rt.find("kb-pairing").is_none());
+        until(&mut rt, |_| stops(&daemon) == 1);
+
+        pair(&mut rt);
+        click(&mut rt, "kb-nav-providers");
+        assert_eq!(rt.state.machine.pairing, None);
+        until(&mut rt, |_| stops(&daemon) == 2);
+        click(&mut rt, "kb-nav-phone");
+        assert!(rt.find("kb-pairing").is_none());
+
+        pair(&mut rt);
+        rt.update(on_close);
+        assert_eq!(rt.state.machine.pairing, None);
+        until(&mut rt, |_| stops(&daemon) == 3);
+        // The passphrase typed for it is not kept in its field either.
+        rt.frame(0.5);
+
+        // The phone makes its key: the way in is put away, and it is said.
+        pair(&mut rt);
+        *daemon.state.lock().unwrap() = (true, false);
+        until(&mut rt, |s| s.machine.pairing.is_none());
+        rt.frame(0.1);
+        let all = texts(&rt);
+        for shown in [
+            "Paired pocket: it approves requests now.",
+            "page served",
+            "Pair another phone",
+            "Pair again",
+        ] {
+            assert!(all.contains(shown), "{shown}: {all}");
+        }
+        assert!(rt.find("kb-pairing").is_none());
+        assert!(rt.find("kb-phone-remove").is_some());
+        // It was not stopped: it ended by itself.
+        assert_eq!(stops(&daemon), 3);
+    }
+
+    #[test]
+    fn the_paired_phone_is_removed_once_confirmed_with_the_passphrase() {
+        let daemon = PhoneDaemon::paired();
+        let unpairs = |daemon: &PhoneDaemon| {
+            daemon.asked(
+                |r| matches!(r, Request::PhoneUnpair { passphrase } if passphrase.expose() == "pw"),
+            )
+        };
+        let mut rt = live_on(scenes::phone, Box::new(daemon.clone()));
+        until(&mut rt, |s| s.machine.conn == Conn::Up { locked: false });
+        rt.frame(0.1);
+
+        click(&mut rt, "kb-phone-remove");
+        let all = texts(&rt);
+        assert!(
+            all.contains(
+                "Remove pocket? Requests will be approved at this computer only, until a phone is paired again."
+            ),
+            "{all}"
+        );
+        // Nothing is asked of the daemon until it is confirmed.
+        click(&mut rt, "kb-confirm-yes");
+        let all = texts(&rt);
+        assert!(all.contains("to remove pocket, the paired phone"), "{all}");
+        assert_eq!(unpairs(&daemon), 0);
+        rt.paste("pw");
+        rt.frame(0.6);
+        click(&mut rt, "kb-passphrase-ok");
+        until(&mut rt, |s| s.machine.phone.is_none());
+        rt.frame(0.7);
+        let all = texts(&rt);
+        for shown in [
+            "Removed pocket: requests are approved at this computer only.",
+            "No phone is paired: requests are approved at this computer only.",
+            "Pair a phone",
+        ] {
+            assert!(all.contains(shown), "{shown}: {all}");
+        }
+        assert!(rt.find("kb-phone-remove").is_none());
+        assert_eq!(unpairs(&daemon), 1);
     }
 }

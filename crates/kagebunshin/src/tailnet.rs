@@ -1,9 +1,11 @@
-//! The local Tailscale daemon, as the remote endpoint asks it: whether
-//! this machine is on its tailnet and at which address, and who the peer
-//! of a connection is.
+//! The local Tailscale daemon, as the remote endpoint and the approval
+//! page ask it: whether this machine is on its tailnet and at which
+//! address, who the peer of a connection is, and this machine's HTTPS
+//! certificate.
 //!
-//! Both come from tailscaled's `LocalAPI`, plain HTTP on a local socket:
-//! `GET /localapi/v0/status` and `GET /localapi/v0/whois?addr=<ip:port>`.
+//! All come from tailscaled's `LocalAPI`, plain HTTP on a local socket:
+//! `GET /localapi/v0/status`, `GET /localapi/v0/whois?addr=<ip:port>` and
+//! `GET /localapi/v0/cert/<name>?type=pair`.
 //! Only a 200 counts; anything else (no socket, a refusal, a timeout, a
 //! peer tailscaled does not know) is an error, and every caller treats an
 //! error as "no": no listener, no identity, no access.
@@ -38,6 +40,11 @@ use zeroize::Zeroizing;
 /// How long one `LocalAPI` request may take, connecting included.
 pub const LOCALAPI_TIMEOUT: Duration = Duration::from_secs(3);
 
+/// How long tailscaled may take over this machine's certificate: it has
+/// one issued the first time it is asked, and again as the one it keeps
+/// nears its end.
+pub const CERT_TIMEOUT: Duration = Duration::from_secs(90);
+
 /// The most of a `LocalAPI` reply read; `/status` lists every peer.
 const MAX_REPLY: usize = 16 * 1024 * 1024;
 
@@ -47,8 +54,8 @@ pub enum TailnetError {
     NotFound,
     #[error("the Tailscale daemon's local API: {0}")]
     Io(#[from] std::io::Error),
-    #[error("the Tailscale daemon's local API did not answer within {LOCALAPI_TIMEOUT:?}")]
-    Timeout,
+    #[error("the Tailscale daemon's local API did not answer within {0:?}")]
+    Timeout(Duration),
     #[error("the Tailscale daemon's local API answered {0}")]
     Status(u16),
     #[error("the Tailscale daemon's local API gave a reply that does not parse: {0}")]
@@ -59,7 +66,12 @@ pub enum TailnetError {
 /// stand in for tailscaled.
 #[async_trait]
 pub trait LocalApi: Send + Sync {
-    async fn get(&self, path: &str) -> Result<Vec<u8>, TailnetError>;
+    /// Answered within `limit`, connecting included.
+    async fn get_within(&self, path: &str, limit: Duration) -> Result<Vec<u8>, TailnetError>;
+
+    async fn get(&self, path: &str) -> Result<Vec<u8>, TailnetError> {
+        self.get_within(path, LOCALAPI_TIMEOUT).await
+    }
 }
 
 /// This machine as tailscaled reports it.
@@ -72,12 +84,24 @@ pub struct SelfStatus {
     /// Its `MagicDNS` name, with the dot at its end; empty without one.
     pub dns_name: String,
     pub ips: Vec<IpAddr>,
+    /// The names tailscaled can get an HTTPS certificate for: this
+    /// machine's `MagicDNS` name once the tailnet has HTTPS turned on,
+    /// none before.
+    pub cert_domains: Vec<String>,
     pub peers: Vec<Peer>,
 }
 
 impl SelfStatus {
     pub fn running(&self) -> bool {
         self.state == "Running"
+    }
+
+    /// This machine's `MagicDNS` name, in lower case and without the dot
+    /// at its end, if tailscaled can get an HTTPS certificate for it.
+    pub fn cert_name(&self) -> Option<String> {
+        let name = self.dns_name.trim_end_matches('.').to_ascii_lowercase();
+        let ours = |d: &String| d.trim_end_matches('.').eq_ignore_ascii_case(&name);
+        (!name.is_empty() && self.cert_domains.iter().any(ours)).then_some(name)
     }
 
     /// The address the remote endpoint listens on: this machine's IPv4
@@ -115,10 +139,18 @@ pub struct Peer {
     pub machine: String,
     pub dns_name: String,
     pub host_name: String,
+    /// Its operating system as tailscaled names it, such as `iOS`,
+    /// `android`, `linux` or `macOS`; empty when it does not say.
+    pub os: String,
     pub ips: Vec<IpAddr>,
 }
 
 impl Peer {
+    /// Whether it is a phone or a tablet: what the approval page is for.
+    pub fn is_phone(&self) -> bool {
+        self.os.eq_ignore_ascii_case("iOS") || self.os.eq_ignore_ascii_case("android")
+    }
+
     /// The address to reach its remote endpoint on: its IPv4 tailnet
     /// address, as this machine's endpoint listens on.
     pub fn ip(&self) -> Option<IpAddr> {
@@ -153,6 +185,34 @@ pub async fn whois(api: &dyn LocalApi, peer: SocketAddr) -> Result<Identity, Tai
     parse_whois(&api.get(&format!("/localapi/v0/whois?addr={addr}")).await?)
 }
 
+/// The path of the certificate for `dns_name`, which may end in a dot.
+fn cert_path(dns_name: &str) -> Result<String, TailnetError> {
+    let name = dns_name.trim_end_matches('.');
+    let plain = |b: u8| b.is_ascii_alphanumeric() || b == b'-' || b == b'.';
+    if name.is_empty() || !name.bytes().all(plain) {
+        return Err(TailnetError::Parse(
+            "this machine's name is not one a certificate can be for".into(),
+        ));
+    }
+    Ok(format!("/localapi/v0/cert/{name}?type=pair"))
+}
+
+/// This machine's HTTPS certificate for `dns_name`, its `MagicDNS` name,
+/// as PEM: the private key, then the certificate and the chain above it.
+/// tailscaled has it issued and keeps it fresh, which can take up to
+/// [`CERT_TIMEOUT`]; it answers only for a name in
+/// [`SelfStatus::cert_domains`].
+///
+/// The key is tailscaled's to give: any process of a user it lets run it
+/// can ask for it, so holding it shows nothing about who holds it.
+pub async fn certificate(
+    api: &dyn LocalApi,
+    dns_name: &str,
+) -> Result<Zeroizing<Vec<u8>>, TailnetError> {
+    let pem = api.get_within(&cert_path(dns_name)?, CERT_TIMEOUT).await?;
+    Ok(Zeroizing::new(pem))
+}
+
 fn first_label(dns: &str) -> String {
     dns.split('.')
         .next()
@@ -169,6 +229,8 @@ fn parse_status(body: &[u8]) -> Result<SelfStatus, TailnetError> {
         me: Option<RawNode>,
         #[serde(default)]
         peer: Option<std::collections::BTreeMap<String, RawNode>>,
+        #[serde(default)]
+        cert_domains: Option<Vec<String>>,
     }
     #[derive(Deserialize)]
     #[serde(rename_all = "PascalCase")]
@@ -181,6 +243,8 @@ fn parse_status(body: &[u8]) -> Result<SelfStatus, TailnetError> {
         dns_name: String,
         #[serde(default)]
         tailscale_i_ps: Option<Vec<IpAddr>>,
+        #[serde(rename = "OS", default)]
+        os: String,
     }
     let raw: Raw = serde_json::from_slice(body).map_err(|e| TailnetError::Parse(e.to_string()))?;
     let me = raw.me;
@@ -194,6 +258,7 @@ fn parse_status(body: &[u8]) -> Result<SelfStatus, TailnetError> {
             node: p.id,
             dns_name: p.dns_name,
             host_name: p.host_name,
+            os: p.os,
             ips: p.tailscale_i_ps.unwrap_or_default(),
         })
         .collect();
@@ -202,6 +267,7 @@ fn parse_status(body: &[u8]) -> Result<SelfStatus, TailnetError> {
         node: me.as_ref().map(|m| m.id.clone()).unwrap_or_default(),
         dns_name: me.as_ref().map(|m| m.dns_name.clone()).unwrap_or_default(),
         ips: me.and_then(|m| m.tailscale_i_ps).unwrap_or_default(),
+        cert_domains: raw.cert_domains.unwrap_or_default(),
         peers,
     })
 }
@@ -278,18 +344,18 @@ impl Tailscaled {
 
 #[async_trait]
 impl LocalApi for Tailscaled {
-    async fn get(&self, path: &str) -> Result<Vec<u8>, TailnetError> {
+    async fn get_within(&self, path: &str, limit: Duration) -> Result<Vec<u8>, TailnetError> {
         let known = self.found().clone();
         if let Some(endpoint) = known {
-            match request(&endpoint, path).await {
+            match request(&endpoint, path, limit).await {
                 // Only a failure to reach it means it may have moved.
-                Err(TailnetError::Io(_) | TailnetError::Timeout) => {}
+                Err(TailnetError::Io(_) | TailnetError::Timeout(_)) => {}
                 other => return other,
             }
         }
         let endpoint = discover().await.ok_or(TailnetError::NotFound)?;
         *self.found() = Some(endpoint.clone());
-        request(&endpoint, path).await
+        request(&endpoint, path, limit).await
     }
 }
 
@@ -367,7 +433,11 @@ fn parse_lsof(out: &str) -> Option<Endpoint> {
     })
 }
 
-async fn request(endpoint: &Endpoint, path: &str) -> Result<Vec<u8>, TailnetError> {
+async fn request(
+    endpoint: &Endpoint,
+    path: &str,
+    limit: Duration,
+) -> Result<Vec<u8>, TailnetError> {
     let exchange = async {
         match endpoint {
             Endpoint::Unix(p) => exchange(UnixStream::connect(p).await?, path, None).await,
@@ -377,9 +447,9 @@ async fn request(endpoint: &Endpoint, path: &str) -> Result<Vec<u8>, TailnetErro
             }
         }
     };
-    tokio::time::timeout(LOCALAPI_TIMEOUT, exchange)
+    tokio::time::timeout(limit, exchange)
         .await
-        .map_err(|_| TailnetError::Timeout)?
+        .map_err(|_| TailnetError::Timeout(limit))?
 }
 
 /// One HTTP/1.0 `GET`, read to the end. No `Origin` or `Referer`: the
@@ -476,10 +546,18 @@ pub mod fake {
             fake
         }
 
+        /// Peers as `(node, name)`, each running Linux.
         pub fn set_status(&self, state: &str, peers: &[(&str, &str)]) {
+            let peers: Vec<_> = peers.iter().map(|(n, m)| (*n, *m, "linux")).collect();
+            self.set_peers(state, &peers);
+        }
+
+        /// Peers as `(node, name, os)`. This machine can get a certificate
+        /// for its name, `self.example.ts.net`.
+        pub fn set_peers(&self, state: &str, peers: &[(&str, &str, &str)]) {
             let peers: serde_json::Map<String, serde_json::Value> = peers
                 .iter()
-                .map(|(node, name)| {
+                .map(|(node, name, os)| {
                     (
                         format!("nodekey:{node}"),
                         serde_json::json!({
@@ -487,6 +565,7 @@ pub mod fake {
                             "HostName": name,
                             "DNSName": format!("{name}.example.ts.net."),
                             "TailscaleIPs": ["100.64.0.9"],
+                            "OS": os,
                         }),
                     )
                 })
@@ -498,8 +577,10 @@ pub mod fake {
                     "HostName": "self",
                     "DNSName": "self.example.ts.net.",
                     "TailscaleIPs": ["100.64.0.1", "fd7a:115c:a1e0::1"],
+                    "OS": "linux",
                 },
                 "Peer": peers,
+                "CertDomains": ["self.example.ts.net"],
             });
             self.set("/localapi/v0/status", Ok(body.to_string().into_bytes()));
         }
@@ -538,7 +619,7 @@ pub mod fake {
 
     #[async_trait]
     impl LocalApi for FakeTailnet {
-        async fn get(&self, path: &str) -> Result<Vec<u8>, TailnetError> {
+        async fn get_within(&self, path: &str, _: Duration) -> Result<Vec<u8>, TailnetError> {
             match self.replies.lock().unwrap().get(path) {
                 Some(Ok(body)) => Ok(body.clone()),
                 Some(Err(code)) => Err(TailnetError::Status(*code)),
@@ -580,11 +661,18 @@ mod tests {
         let body = br#"{"Version":"1.102.3","BackendState":"Running",
             "TailscaleIPs":["100.64.0.1","fd7a:115c:a1e0::1"],
             "Self":{"ID":"nW765","HostName":"box","DNSName":"box.tail5.ts.net.",
-                    "TailscaleIPs":["100.64.0.1","fd7a:115c:a1e0::1"]},
+                    "TailscaleIPs":["100.64.0.1","fd7a:115c:a1e0::1"],"OS":"linux"},
+            "CertDomains":["box.tail5.ts.net"],
             "Peer":{"nodekey:ab":{"ID":"nMAC","HostName":"Air","DNSName":"laptop-air.tail5.ts.net.",
-                    "TailscaleIPs":["100.70.0.2"]}}}"#;
+                    "TailscaleIPs":["100.70.0.2"],"OS":"macOS"},
+                    "nodekey:cd":{"ID":"nPHONE","HostName":"Phone","DNSName":"phone.tail5.ts.net.",
+                    "TailscaleIPs":["100.70.0.3"],"OS":"iOS"}}}"#;
         let st = parse_status(body).unwrap();
         assert!(st.running());
+        assert_eq!(st.cert_domains, ["box.tail5.ts.net"]);
+        let phones: Vec<_> = st.peers.iter().filter(|p| p.is_phone()).collect();
+        assert_eq!(phones.len(), 1, "a laptop is not a phone");
+        assert_eq!(phones[0].node, "nPHONE");
         assert_eq!(st.node, "nW765");
         assert_eq!(st.listen_ip(), Some("100.64.0.1".parse().unwrap()));
         assert_eq!(st.peers_named("laptop-air")[0].node, "nMAC");
@@ -595,6 +683,24 @@ mod tests {
         let stopped = parse_status(br#"{"BackendState":"Stopped","Self":null}"#).unwrap();
         assert!(!stopped.running());
         assert_eq!(stopped.listen_ip(), None);
+        assert!(stopped.cert_domains.is_empty(), "HTTPS is not turned on");
+    }
+
+    #[tokio::test]
+    async fn the_certificate_is_asked_for_by_name_as_a_pair() {
+        let fake = FakeTailnet::running(&[]);
+        let path = "/localapi/v0/cert/self.example.ts.net?type=pair";
+        assert!(certificate(&fake, "self.example.ts.net.").await.is_err());
+        fake.set(path, Ok(b"-----BEGIN EC PRIVATE KEY-----\n".to_vec()));
+        let pem = certificate(&fake, "self.example.ts.net.").await.unwrap();
+        assert!(pem.starts_with(b"-----BEGIN EC PRIVATE KEY"));
+        // A name is never anything but a name in the path.
+        for bad in ["", ".", "a/b.ts.net", "a?b", "a b", "a%2fb"] {
+            assert!(
+                matches!(certificate(&fake, bad).await, Err(TailnetError::Parse(_))),
+                "{bad:?}"
+            );
+        }
     }
 
     #[test]

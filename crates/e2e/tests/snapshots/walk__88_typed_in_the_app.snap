@@ -37,7 +37,7 @@ next (you): ask the human for the missing secret values. It waits for the human 
 $ kagebunshin store set beacon.dev API_TOKEN WEBHOOK_SECRET
 waiting for a person to type, in the kagebunshin app, the values of API_TOKEN, WEBHOOK_SECRET for [beacon.dev] of the local store: its window has a field for each key and takes the store's passphrase
 kagebunshin: a person refused, in the app, to type the values, so nothing was set
-hint: a person refused this in the app: ask them before running it again
+hint: a person refused this: ask them before running it again
 [exit 5]
 
 -- the human types one value and the passphrase, and clicks Save: the other key is as before

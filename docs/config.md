@@ -48,6 +48,9 @@ min_len = 8                   # values shorter than this are not masked in piped
 
 [remote]
 port = 47317                  # the remote endpoint's TCP port, and the one --machine connects to
+
+[phone]
+port = 47318                  # the approval page's TCP port
 ```
 
 ## The logs
@@ -216,3 +219,71 @@ kagebunshin run --machine desk --project widget -- ./bot   # in any folder
   seconds. It is plain HTTP on the tailnet, which Tailscale encrypts
   between the two machines; see
   [threat-model.md](threat-model.md#remote-callers) for what that leaves.
+
+## The approval page
+
+A phone on your tailnet can approve a request for values marked
+sensitive, so you need not be at this computer's keyboard. The daemon
+serves that one phone a small page, and the phone approves one request at
+a time with a passkey, which asks for your face or fingerprint. Nothing
+is installed on the phone but Tailscale.
+
+It needs:
+
+- Tailscale on the phone, signed in to the same tailnet, and a tailnet
+  policy that lets the phone reach this machine on `[phone] port`.
+- MagicDNS and HTTPS certificates turned on for the tailnet, in
+  Tailscale's admin console. A browser makes a passkey only on a page it
+  reached over HTTPS under a name, and that name is this machine's on the
+  tailnet. Tailscale has the certificate issued, which puts the machine's
+  tailnet name in the public certificate logs.
+- On Linux, a user tailscaled gives certificates to: root, or the
+  operator (`sudo tailscale set --operator=$USER`).
+
+Pair the phone in the app, under Phone: pick it among the tailnet's
+phones and tablets, give the passphrase, and point the phone's camera at
+the code the app shows. The page there makes the passkey, its approval
+key. On an iPhone, open the page in Safari and add it to the home screen
+to keep it at hand.
+
+```sh
+kagebunshin status
+# phone: pocket approves at https://desk.example.ts.net:47318
+#   last answered there: approved widget/dev at 2026-11-19 14:54:20Z
+```
+
+- The page is served on this machine's IPv4 tailnet address and `[phone]
+  port` only, while a phone is paired or being paired, the daemon is
+  unlocked and Tailscale is running. A locked daemon serves nothing: it
+  cannot read which phone is paired. When the page cannot be served,
+  `status` and the app say why.
+- Only the paired phone gets the page, and for the ten minutes a pairing
+  lasts the phone being paired. The daemon asks tailscaled who each
+  connection is, as it does for the remote endpoint; every other machine
+  is refused.
+- One phone is paired at a time. Pairing another replaces it once the new
+  one has made its key; until then the old one still approves. The app
+  removes it, with the passphrase. The pairing is in the encrypted store:
+  the phone's name and Tailscale node id, and its passkey's public key,
+  which is no secret.
+- A request shows on the phone as it does in the app: the command, the
+  keys it wants, why it asks, who asks and the time left, by name and
+  never a value. Approve asks for the passkey; Deny asks for nothing, as
+  in the app. The first answer counts, wherever it is given, and the
+  other side says where that was.
+- The phone approves hand-outs only. Unlocking, an import, values an
+  agent asks you to type, removing a mark and the grants stay at this
+  computer, with the passphrase; the page shows an import or a request to
+  type values as waiting at the computer, and can deny it.
+- A request still waits only while the app runs on this computer, and
+  the phone is not notified: open the page to see what waits. Both are
+  next.
+- Each answer given on the phone is in the audit log (`phone approve`,
+  `phone deny`), with the phone and its user as Tailscale names them, and
+  so is each pairing.
+- Changing `[phone] port` moves the page: `status` gives its new
+  address, which the phone opens in place of the one it kept. Its passkey
+  is for this machine's name, so it goes on working there.
+
+See [threat-model.md](threat-model.md#the-paired-phone) for what an
+approval there rests on.

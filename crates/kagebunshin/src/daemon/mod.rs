@@ -102,6 +102,14 @@ pub fn run(opts: Options) -> Result<(), DaemonError> {
         // Off until the store says otherwise; it ends with the runtime.
         tokio::spawn(crate::ipc::remote::supervise(
             daemon.clone(),
+            tailnet.clone(),
+            remote_cfg.clone(),
+            crate::ipc::remote::POLL,
+            std::future::pending(),
+        ));
+        // Off until a phone is paired; it ends with the runtime too.
+        tokio::spawn(crate::ipc::phone::supervise(
+            daemon.clone(),
             tailnet,
             remote_cfg,
             crate::ipc::remote::POLL,

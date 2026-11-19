@@ -4,6 +4,8 @@
 pub mod client;
 pub mod frame;
 pub mod paths;
+pub mod phone;
+pub mod prompt;
 pub mod protocol;
 pub mod remote;
 pub mod server;

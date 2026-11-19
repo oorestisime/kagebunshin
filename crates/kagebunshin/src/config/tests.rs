@@ -570,6 +570,39 @@ min_len = 12
     }
 }
 
+/// The approval page's port is `[phone] port`, beside the remote
+/// endpoint's by default, and written only when it is not the default.
+#[test]
+fn the_approval_pages_port() {
+    use super::schema::{DEFAULT_PHONE_PORT, DEFAULT_REMOTE_PORT};
+
+    let d = Config::default();
+    assert_eq!(d.phone.port, DEFAULT_PHONE_PORT);
+    assert_ne!(DEFAULT_PHONE_PORT, DEFAULT_REMOTE_PORT);
+    assert!(!toml::to_string(&d).unwrap().contains("phone"));
+
+    let text = "schema = 1\n[phone]\nport = 8443\n";
+    let c = parse_config(Path::new("c"), text).unwrap();
+    assert_eq!(c.phone.port, 8443);
+    assert_eq!(c.remote.port, DEFAULT_REMOTE_PORT);
+    let round = toml::to_string(&c).unwrap();
+    assert_eq!(parse_config(Path::new("c"), &round).unwrap(), c);
+    assert_eq!(
+        parse_config(Path::new("c"), "schema = 1\n[phone]\n").unwrap(),
+        d
+    );
+
+    for (body, want) in [
+        ("port = 70000", "u16"),
+        ("port = \"8443\"", "invalid type"),
+        ("enabled = true", "unknown field `enabled`"),
+    ] {
+        let text = format!("schema = 1\n[phone]\n{body}\n");
+        let err = parse_config(Path::new("c"), &text).unwrap_err().to_string();
+        assert!(err.contains(want), "{body}: {err}");
+    }
+}
+
 #[test]
 fn idle_timeout_format() {
     let ok = [

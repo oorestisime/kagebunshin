@@ -73,13 +73,13 @@ waiting for a person to approve, in the kagebunshin app, importing 4 keys from 2
 
 inbox ($T/work/inbox): nothing was written
   failed: a person refused the import in the app, so nothing was imported
-  hint: a person refused this in the app: ask them before running it again
+  hint: a person refused this: ask them before running it again
 
 ledger ($T/work/ledger): nothing was written
   failed: a person refused the import in the app, so nothing was imported
-  hint: a person refused this in the app: ask them before running it again
+  hint: a person refused this: ask them before running it again
 kagebunshin: a person refused the import in the app, so nothing was imported
-hint: a person refused this in the app: ask them before running it again
+hint: a person refused this: ask them before running it again
 [exit 5]
 
 $ ls $HOME/.config/kagebunshin/projects | grep -E 'inbox|ledger'

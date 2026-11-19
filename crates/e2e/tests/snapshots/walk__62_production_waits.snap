@@ -156,7 +156,7 @@ ask the human: approve the request in the app (`kagebunshin app`) when it asks
 
 $ kagebunshin --env prod run -- ./test.sh
 kagebunshin: environment prod of project api: a person denied the request in the app, so nothing was handed out. It asked for every value of the environment, which is marked sensitive
-hint: a person refused this in the app: ask them before running it again
+hint: a person refused this: ask them before running it again
 [exit 5]
 
 -- the human types the passphrase and clicks Approve

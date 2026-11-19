@@ -18,14 +18,20 @@ until you hide it.
 </p>
 
 Under the projects is what belongs to the machine and to no project:
-Providers, Remote agents and Activity. Providers has a card for each provider: whether it
+Providers, Remote agents, Phone and Activity. Providers has a card for each provider: whether it
 can read now, the environments that read from it and how much each reads,
 and how to connect it. AWS is checked once for each profile and region an
 environment reads with, and a profile whose login ran out has its Log in
 button beside it. Remote agents says whether the
 [remote endpoint](config.md#the-remote-endpoint) listens and lists the
 machines it lets in. Each grant can be revoked there, or given a new
-token, which shows once and takes the passphrase. Activity is the audit
+token, which shows once and takes the passphrase. Phone pairs the phone
+that approves requests through the
+[approval page](config.md#the-approval-page): it lists the tailnet's
+phones, and pairing one takes the passphrase and shows a code for the
+phone to scan, until the phone has made its key or the view is left. It
+then names the paired phone, says whether its page is served and what
+was last answered there, and removes it. Activity is the audit
 log of every project or of one; the runs that needed no approval are not
 in it, and `kagebunshin audit --all` lists them.
 
@@ -36,7 +42,8 @@ secret is marked and unmarked on its header in the key list, beside the
 too, so you can tick several and unmark them with one passphrase. A line
 names what changed and goes after a few seconds; one with a warning, or a
 failure, stays until you dismiss it. While the app runs, it is also where
-you approve or deny a command that needs a marked value, approve an import
+you approve or deny a command that needs a marked value (the paired phone
+can answer that one too), approve an import
 of env files an agent asks for, and type the secret values an agent asks
 you for; with the app not running, such a command is refused.
 
