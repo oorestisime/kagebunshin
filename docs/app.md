@@ -30,8 +30,9 @@ that approves requests through the
 [approval page](config.md#the-approval-page): it lists the tailnet's
 phones, and pairing one takes the passphrase and shows a code for the
 phone to scan, until the phone has made its key or the view is left. It
-then names the paired phone, says whether its page is served and what
-was last answered there, and removes it. Activity is the audit
+then names the paired phone, says whether its page is served, whether
+the phone is notified of requests and what was last answered there, and
+removes it. Activity is the audit
 log of every project or of one; the runs that needed no approval are not
 in it, and `kagebunshin audit --all` lists them.
 
@@ -45,7 +46,8 @@ failure, stays until you dismiss it. While the app runs, it is also where
 you approve or deny a command that needs a marked value (the paired phone
 can answer that one too), approve an import
 of env files an agent asks for, and type the secret values an agent asks
-you for; with the app not running, such a command is refused.
+you for; with the app not running, such a command is refused, unless it
+is one the paired phone can approve and the phone is notified of it.
 
 On Linux the app stays in the tray: closing the window hides it, and the
 tray icon or another `kagebunshin app` brings it back. A command that

@@ -743,7 +743,8 @@ pub enum ResolveError {
     /// One that waits for a human decision says only that.
     #[error("{}", no_app_text(.0))]
     NoApp(Box<ResolveError>),
-    /// A person denied the request in the app, or nobody answered it.
+    /// A person denied the request, in the app or on the paired phone, or
+    /// nobody answered it.
     #[error("{}", unapproved_text(.0))]
     NotApproved(Box<Unapproved>),
     /// The process that asked ended while its request waited in the app.
@@ -888,8 +889,8 @@ const NAMED_KEYS: usize = 8;
 fn unapproved_text(n: &Unapproved) -> String {
     let Unapproved { project, env, .. } = n;
     let how = match n.waited {
-        Some(waited) => format!("nobody answered the app's prompt within {}", within(waited)),
-        None => "a person denied the request in the app".to_owned(),
+        Some(waited) => format!("nobody answered the request within {}", within(waited)),
+        None => "a person denied the request".to_owned(),
     };
     let listed = |names: Vec<String>| match names.len() {
         n if n > NAMED_KEYS => format!(

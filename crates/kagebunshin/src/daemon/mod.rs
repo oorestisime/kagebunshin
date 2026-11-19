@@ -8,6 +8,7 @@
 
 pub mod broker;
 pub mod proof;
+pub mod push;
 pub mod resolve;
 pub mod shared;
 #[cfg(test)]
@@ -76,6 +77,7 @@ pub fn run(opts: Options) -> Result<(), DaemonError> {
     let audit = AuditLog::from_env().map_err(DaemonError::Audit)?;
     info!(path = %audit.path().display(), "audit log");
     let proofs = proof::Proofs::beside(audit.path());
+    let push = push::PushState::beside(audit.path());
     let tailnet: Arc<dyn crate::tailnet::LocalApi> = Arc::new(crate::tailnet::Tailscaled::new());
     let daemon = Daemon::new(
         Box::new(move || Registry::load(&config_dir)),
@@ -84,7 +86,8 @@ pub fn run(opts: Options) -> Result<(), DaemonError> {
     )
     .with_audit(audit)
     .with_proofs(proofs)
-    .with_tailnet(tailnet.clone());
+    .with_tailnet(tailnet.clone())
+    .with_push(Arc::new(crate::webpush::Https::new()), push);
     let remote_cfg = server.config();
 
     let rt = tokio::runtime::Builder::new_multi_thread()

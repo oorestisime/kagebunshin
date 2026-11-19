@@ -178,7 +178,9 @@ token. See
 
 A phone on your tailnet can approve as well. The app pairs it, and it
 then approves a request on a page this machine serves it alone, with a
-passkey: your face or fingerprint in place of the passphrase. See
+passkey: your face or fingerprint in place of the passphrase. It is
+notified of a request, which then waits for it even with the app closed.
+See
 [docs/config.md](docs/config.md#the-approval-page).
 
 ## What it does not do
@@ -213,7 +215,7 @@ they need and keeps the values with the original.
 ## Status
 
 > [!NOTE]
-> **Alpha**; the latest build is v0.0.1-alpha.12.
+> **Alpha**; the latest build is v0.0.1-alpha.13.
 
 There are binaries for Linux x86_64 and aarch64 (glibc 2.35 or later)
 and for macOS arm64. The macOS
@@ -224,7 +226,7 @@ AWS Secrets Manager and the local store are in daily use. Proton Pass
 has handed values from a real vault to a bot on another machine, through
 the remote endpoint; that is one run, not daily use yet. Approving on a
 phone is new: its design approved requests from a real iPhone as a
-prototype, this build has not yet, and it does not notify the phone. The app is
+prototype, notifications included; this build has not yet. The app is
 experimental: its UI library is pinned to a
 prerelease commit.
 

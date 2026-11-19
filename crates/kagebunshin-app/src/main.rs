@@ -5005,12 +5005,12 @@ fn phone_view(p: Paint, s: &App) -> El {
                         },
                     )),
             );
-            let page = |label: &str, color, detail: Option<&str>| {
-                let mut r = row().w_full().gap(space::S2).center_y().child(badge(
-                    "kb-phone-page",
-                    label,
-                    color,
-                ));
+            let page = |key: &str, label: &str, color, detail: Option<&str>| {
+                let mut r = row()
+                    .w_full()
+                    .gap(space::S2)
+                    .center_y()
+                    .child(badge(key, label, color));
                 if let Some(detail) = detail {
                     r = r.child(
                         text(detail)
@@ -5027,11 +5027,29 @@ fn phone_view(p: Paint, s: &App) -> El {
                 (st.url.as_deref(), st.problem.as_deref())
             });
             now = match (url, problem) {
-                (Some(url), _) => now.child(page("page served", p.good, Some(url))),
+                (Some(url), _) => {
+                    now.child(page("kb-phone-page", "page served", p.good, Some(url)))
+                }
                 (None, Some(problem)) => now
-                    .child(page("page not served", p.warn, None))
+                    .child(page("kb-phone-page", "page not served", p.warn, None))
                     .child(note(problem)),
-                (None, None) => now.child(page("page not served yet", p.info, None)),
+                (None, None) => {
+                    now.child(page("kb-phone-page", "page not served yet", p.info, None))
+                }
+            };
+            let told = |label: &str, color| page("kb-phone-notifies", label, color, None);
+            now = match (phone.notifies, phone.untold.as_deref()) {
+                (true, None) => now.child(told("notifications on", p.good)).child(note(
+                    "It is told of each request it can approve, so one waits for it even while this app is closed.",
+                )),
+                (true, Some(why)) => now
+                    .child(told("notifications on", p.warn))
+                    .child(note(&format!("The last one did not go out: {why}."))),
+                (false, why) => now.child(told("notifications off", p.info)).child(note(&format!(
+                    "{}To be told of a request there, add the page to the phone's home screen, open it from there and turn notifications on.",
+                    why.map(|why| format!("The last one did not go out: {why}. "))
+                        .unwrap_or_default()
+                ))),
             };
             let last = status.and_then(|st| st.last.as_ref());
             now = now.child(note(&match (last, phone.seen) {
@@ -6484,6 +6502,8 @@ mod scenes {
                 node: "npocket".into(),
                 paired: 1_795_046_400,
                 seen: Some(1_795_100_000),
+                notifies: true,
+                untold: None,
             }),
             url: Some(PAGE_URL.into()),
             problem: None,

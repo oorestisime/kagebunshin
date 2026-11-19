@@ -35,9 +35,9 @@ $ kagebunshin audit | grep -E 'api/prod|api/rc|shop/prod' | tail -20
 <time> allowed ask approval api/prod pid <n> program ./test.sh keys API_KEY,API_URL,DATABASE_URL,LOG_LEVEL,SIGNING_KEY (run)
 <time> denied  run api/prod pid <n> program ./test.sh: refusing environment prod of project api: it is marked sensitive; handing it out takes approval in the app, which is not open
 <time> allowed ask approval api/prod pid <n> program ./test.sh keys API_KEY,API_URL,DATABASE_URL,LOG_LEVEL,SIGNING_KEY (run)
-<time> timeout run api/prod pid <n> program ./test.sh: environment prod of project api: nobody answered the app's prompt within 3 seconds, so nothing was handed out. It asked for every value of the environment, which is marked sensitive
+<time> timeout run api/prod pid <n> program ./test.sh: environment prod of project api: nobody answered the request within 3 seconds, so nothing was handed out. It asked for every value of the environment, which is marked sensitive
 <time> allowed ask approval api/prod pid <n> program ./test.sh keys API_KEY,API_URL,DATABASE_URL,LOG_LEVEL,SIGNING_KEY (run)
-<time> denied  run api/prod pid <n> program ./test.sh: environment prod of project api: a person denied the request in the app, so nothing was handed out. It asked for every value of the environment, which is marked sensitive
+<time> denied  run api/prod pid <n> program ./test.sh: environment prod of project api: a person denied the request, so nothing was handed out. It asked for every value of the environment, which is marked sensitive
 <time> allowed ask approval api/prod pid <n> program ./test.sh keys API_KEY,API_URL,DATABASE_URL,LOG_LEVEL,SIGNING_KEY (run)
 <time> allowed run api/prod pid <n> program ./test.sh keys API_KEY,API_URL,DATABASE_URL
 <time> allowed acknowledge env shop/prod pid <n>

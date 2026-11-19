@@ -16,9 +16,18 @@
 //! request that hands values out: one that writes the store (an import,
 //! typed values) is approved in the app, which has the passphrase the
 //! write needs. Denying takes no proof anywhere.
+//!
+//! A phone that allowed notifications is told of each request it can
+//! answer as it starts waiting, through its browser's push service
+//! (`webpush`), so such a request waits for the phone even when the app
+//! is not open. What it is told is names: what the request is for and
+//! the program that asks, never its arguments. A notification approves
+//! nothing: it opens the page.
 
 use std::collections::VecDeque;
-use std::sync::Weak;
+use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use serde::Serialize;
@@ -27,7 +36,9 @@ use tracing::{info, warn};
 
 use super::{Approvals, Daemon, Inner, Phase, Reply};
 use crate::audit::{Decision, Event};
+use crate::daemon::push::PushState;
 use crate::daemon::resolve::ResolveError;
+use crate::ipc::prompt::Words;
 use crate::ipc::protocol::{
     ApprovalPrompt, ApprovalReason, Caller, PHONE_PAIRING, PhoneAnswer, PhoneChoice,
     PhonePairingView, PhoneStatus, PhoneView, RemotePeer, Response,
@@ -37,6 +48,7 @@ use crate::store::{PairedPhone, Passphrase};
 use crate::tailnet::{self, Peer, SelfStatus};
 use crate::types::{EnvName, ProjectName};
 use crate::webauthn::{self, CHALLENGE_LEN, Site, WebauthnError};
+use crate::webpush::{Delivery, MAX_TEXT, Message, PushError, PushService, Subscription};
 
 /// How long the phone has to sign an approval's challenge: long enough
 /// for Face ID, short enough that an unused one is soon worth nothing.
@@ -44,6 +56,15 @@ const CHALLENGE_LIFE: Duration = Duration::from_mins(2);
 
 /// How many answered requests the page lists.
 const RECENT: usize = 10;
+
+/// How much of a program's name a notification shows.
+const PROGRAM_SHOWN: usize = 60;
+
+/// What notifies the paired phone: what sends, and what is kept for it.
+pub(super) struct Push {
+    pub(super) service: Arc<dyn PushService>,
+    pub(super) state: PushState,
+}
 
 /// A pairing going on. Kept in the session, so a lock drops it and the
 /// passphrase with it.
@@ -72,6 +93,8 @@ pub(super) struct Phone {
     challenge: Option<Challenge>,
     /// The requests answered since the daemon started, newest first.
     recent: VecDeque<Answered>,
+    /// Why the last notification did not reach the phone's push service.
+    untold: Option<String>,
 }
 
 struct Challenge {
@@ -122,6 +145,9 @@ pub struct PhonePage {
     pub version: u64,
     /// This phone is the paired one.
     pub paired: bool,
+    /// It is told of a request that waits: it allowed notifications, and
+    /// what that gave is the one kept here.
+    pub notified: bool,
     /// The seconds this phone has left to make its passkey, while it is
     /// being paired.
     pub pairing: Option<u64>,
@@ -177,6 +203,8 @@ pub enum PhoneError {
     #[error("not accepted: {0}")]
     Passkey(#[from] WebauthnError),
     #[error("{0}")]
+    Push(#[from] PushError),
+    #[error("{0}")]
     Failed(String),
 }
 
@@ -187,6 +215,34 @@ fn on_phone(reason: &ApprovalReason) -> bool {
         ApprovalReason::Keys | ApprovalReason::Marked | ApprovalReason::Waiting { .. } => true,
         ApprovalReason::Import { .. } | ApprovalReason::Type { .. } => false,
     }
+}
+
+/// What the phone is told of `prompt`, as the page's service worker
+/// reads it: what it is for and the program that asks. Not the
+/// arguments: a notification stays on the phone's lock screen.
+fn notification(prompt: &ApprovalPrompt) -> Vec<u8> {
+    let program = (prompt.argv.first())
+        .and_then(|a| Path::new(a).file_name()?.to_str())
+        .map_or_else(
+            || "A command".to_owned(),
+            |name| format!("`{}`", name.chars().take(PROGRAM_SHOWN).collect::<String>()),
+        );
+    let text = serde_json::json!({
+        "id": prompt.id,
+        "title": Words::of(prompt).title,
+        "body": format!("{program} waits for you to approve or deny it."),
+    })
+    .to_string();
+    if text.len() <= MAX_TEXT {
+        return text.into_bytes();
+    }
+    serde_json::json!({
+        "id": prompt.id,
+        "title": "A command asks for sensitive values",
+        "body": "It waits for you to approve or deny it.",
+    })
+    .to_string()
+    .into_bytes()
 }
 
 fn challenge() -> Result<[u8; CHALLENGE_LEN], PhoneError> {
@@ -393,6 +449,7 @@ impl Daemon {
         if paired.is_none() && pairing.is_none() {
             return None;
         }
+        let notifies = (paired.as_ref()).is_some_and(|phone| self.held_for(phone).is_some());
         let p = self.inner.phone();
         Some(Box::new(PhoneStatus {
             paired: paired.map(|phone| PhoneView {
@@ -400,6 +457,8 @@ impl Daemon {
                 node: phone.node,
                 paired: phone.paired,
                 seen: p.seen,
+                notifies,
+                untold: p.untold.clone(),
             }),
             url: p.url.clone(),
             problem: p.problem.clone(),
@@ -493,7 +552,9 @@ impl Daemon {
     pub fn phone_page(&self, node: &str) -> PhonePage {
         // Before looking, so a change after it gives another version.
         let version = self.phone_version();
-        let paired = self.paired_phone().is_some_and(|p| p.node == node);
+        let phone = self.paired_phone().filter(|p| p.node == node);
+        let paired = phone.is_some();
+        let notified = phone.is_some_and(|phone| self.held_for(&phone).is_some());
         let pairing = (self.pairing())
             .filter(|(n, ..)| n == node)
             .map(|(.., left)| left);
@@ -513,6 +574,7 @@ impl Daemon {
         PhonePage {
             version,
             paired,
+            notified,
             pairing,
             prompts,
             recent,
@@ -612,8 +674,139 @@ impl Daemon {
         }
         info!(phone = %name, ?change, "paired a phone");
         self.phone_event("phone paired", Decision::Allowed, &caller, |_| {});
+        // What the phone paired before was told with is not this one's.
+        self.forget_push();
         self.inner.phone_changed();
         Ok(())
+    }
+
+    /// What `phone`, the paired one, gave for its notifications.
+    fn held_for(&self, phone: &PairedPhone) -> Option<Subscription> {
+        (self.inner.push.as_ref())?
+            .state
+            .held_for(&phone.node, &phone.credential)
+    }
+
+    /// What telling the paired phone of a request takes: what it gave for
+    /// its notifications, while its page is served.
+    fn phone_push(&self) -> Option<(&Push, Subscription)> {
+        let push = self.inner.push.as_ref()?;
+        let to = self.held_for(&self.paired_phone()?)?;
+        self.inner.phone().url.as_ref()?;
+        Some((push, to))
+    }
+
+    /// Whether the paired phone is told of a request that waits.
+    pub(super) fn phone_listens(&self) -> bool {
+        self.phone_push().is_some()
+    }
+
+    /// Drops what the paired phone gave for its notifications.
+    pub(super) fn forget_push(&self) {
+        if let Some(push) = &self.inner.push {
+            push.state.forget(None);
+        }
+        self.inner.phone().untold = None;
+    }
+
+    /// Tells the paired phone that `prompt` waits, for `wait`, if it can
+    /// answer it and allowed notifications. What it returns holds while
+    /// the phone is told, as far as this machine knows: until its push
+    /// service does not take the notification. Sending never delays the
+    /// prompt.
+    pub(super) fn tell_phone(
+        &self,
+        prompt: &ApprovalPrompt,
+        wait: Duration,
+    ) -> Option<Arc<AtomicBool>> {
+        if !on_phone(&prompt.reason) {
+            return None;
+        }
+        let (push, to) = self.phone_push()?;
+        let message = push.state.key().and_then(|key| {
+            Message::new(&key, &to, &notification(prompt), wait, unix_now())
+                .map_err(|e| e.to_string())
+        });
+        let message = match message {
+            Ok(message) => message,
+            Err(e) => {
+                warn!(id = prompt.id, reason = %e, "cannot tell the paired phone of a request");
+                self.inner.phone().untold = Some(e);
+                return None;
+            }
+        };
+        let told = Arc::new(AtomicBool::new(true));
+        let (daemon, flag, id) = (self.clone(), told.clone(), prompt.id);
+        tokio::spawn(async move {
+            let Some(push) = &daemon.inner.push else {
+                return;
+            };
+            let untold = match push.service.send(message).await {
+                Ok(Delivery::Taken) => None,
+                Ok(Delivery::Gone) => {
+                    push.state.forget(Some(&to));
+                    Some(
+                        "the phone no longer takes notifications from this machine; allow \
+                         them again on its page"
+                            .to_owned(),
+                    )
+                }
+                Ok(Delivery::Refused(status, said)) => Some(format!(
+                    "{} refused the last notification ({status}): {said}",
+                    to.service()
+                )),
+                Err(e) => Some(format!("the last notification was not sent: {e}")),
+            };
+            if let Some(why) = &untold {
+                warn!(id, reason = %why, "the paired phone was not told of a request");
+                flag.store(false, Ordering::Relaxed);
+            }
+            daemon.inner.phone().untold = untold;
+            daemon.inner.phone_seq.send_modify(|n| *n += 1);
+        });
+        Some(told)
+    }
+
+    /// This machine's key for notifications, which the paired phone,
+    /// whose node is `node`, subscribes to: base64url.
+    pub fn phone_push_key(&self, node: &str) -> Result<String, PhoneError> {
+        self.paired_as(node)?;
+        let push = self.push()?;
+        let key = push.state.key().map_err(PhoneError::Failed)?;
+        Ok(key.public())
+    }
+
+    /// The paired phone `peer` allowed notifications: keeps what its
+    /// browser gave for them, in place of what it gave before.
+    pub fn phone_push_subscribe(
+        &self,
+        peer: &RemotePeer,
+        endpoint: &str,
+        p256dh: &str,
+        auth: &str,
+    ) -> Result<(), PhoneError> {
+        let phone = self.paired_as(&peer.node)?;
+        let push = self.push()?;
+        let subscription = Subscription::new(endpoint, p256dh, auth)?;
+        let service = subscription.service();
+        (push.state)
+            .hold(&phone.node, &phone.credential, subscription)
+            .map_err(PhoneError::Failed)?;
+        self.inner.phone().untold = None;
+        info!(phone = %peer.machine, %service, "the paired phone allowed notifications");
+        self.phone_event(
+            "phone notifications",
+            Decision::Allowed,
+            &Caller::remote(peer.named()),
+            |_| {},
+        );
+        self.inner.phone_seq.send_modify(|n| *n += 1);
+        Ok(())
+    }
+
+    fn push(&self) -> Result<&Push, PhoneError> {
+        (self.inner.push.as_ref())
+            .ok_or_else(|| PhoneError::Failed("this daemon sends no notifications".into()))
     }
 
     /// The paired phone, if `node` is it.

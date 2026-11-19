@@ -18,19 +18,17 @@ What is left of v1 is release work:
   the machine that asked, and no token. `pass-cli` shows a token's expiry
   only in human-readable output, so `connect proton --expires` is typed
   by hand until it has a machine-readable form.
-- Approving on a phone: notify the phone of a request (web push), and
-  let a request wait for the phone when the app is not running on this
-  computer; today it is refused then, and the page has to be opened to
-  see what waits. Run this build's page from a real phone: so far it ran
-  in tests and a desktop browser, and an earlier prototype of it on an
-  iPhone.
+- Approving on a phone: run this build from a real phone, notifications
+  included. So far the page ran in tests and a desktop browser, where a
+  notification sent through Google's push service arrived, and an
+  earlier prototype of it on an iPhone.
 - macOS: run it for real. CI builds and tests it and the Release
   workflow ships an arm64 tarball, but no one has yet set it up on a Mac
   from one: the service, the app and its approvals are untried there.
 - Signed and notarized macOS builds; a Homebrew tap from
   `packaging/homebrew/kagebunshin.rb`; `cargo install` from crates.io,
   which `publish = false` blocks today.
-- Choose the version number for v1 (today `0.0.1-alpha.12`), bump it and
+- Choose the version number for v1 (today `0.0.1-alpha.13`), bump it and
   tag; the release workflow refuses a tag that does not match it.
 
 ## After v1

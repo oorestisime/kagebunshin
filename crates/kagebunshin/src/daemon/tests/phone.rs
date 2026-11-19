@@ -4,10 +4,13 @@ use super::*;
 use crate::audit::AuditLog;
 use crate::config::schema::DEFAULT_PHONE_PORT;
 use crate::daemon::broker::phone::{Outcome, PhoneError, Place};
+use crate::daemon::push::{self, PushState};
 use crate::ipc::protocol::{PHONE_PAIRING, PhoneChoice, RemotePeer};
 use crate::tailnet::fake::FakeTailnet;
 use crate::webauthn::fake::FakePasskey;
 use crate::webauthn::{Site, WebauthnError};
+use crate::webpush::fake::{FakeBrowser, FakePush};
+use crate::webpush::{Delivery, PushError};
 
 fn site() -> Site {
     Site::new("self.example.ts.net", DEFAULT_PHONE_PORT)
@@ -31,6 +34,19 @@ fn phone() -> RemotePeer {
 /// laptop, a phone and a tablet. Its store holds S in dev, marked
 /// sensitive, so reading it waits for approval.
 async fn phone_daemon() -> (tempfile::TempDir, AuditLog, StoreFile, Daemon) {
+    let (tmp, log, file, d, _) = push_daemon().await;
+    (tmp, log, file, d)
+}
+
+/// [`phone_daemon`], and the push service it tells the phone through. Its
+/// notifications file is `push.json` in the directory returned.
+async fn push_daemon() -> (
+    tempfile::TempDir,
+    AuditLog,
+    StoreFile,
+    Daemon,
+    Arc<FakePush>,
+) {
     let tailnet = Arc::new(FakeTailnet::default());
     tailnet.set_peers(
         "Running",
@@ -41,7 +57,10 @@ async fn phone_daemon() -> (tempfile::TempDir, AuditLog, StoreFile, Daemon) {
         ],
     );
     let (tmp, log, file, d) = import_daemon("5m");
-    let d = d.with_tailnet(tailnet);
+    let service = Arc::new(FakePush::default());
+    let d = d
+        .with_tailnet(tailnet)
+        .with_push(service.clone(), PushState::new(tmp.path().join(push::FILE)));
     init(&file, &d).await;
     let set = d
         .handle(Request::StoreSet {
@@ -53,7 +72,38 @@ async fn phone_daemon() -> (tempfile::TempDir, AuditLog, StoreFile, Daemon) {
         })
         .await;
     assert!(matches!(set, Response::Store { .. }), "{set:?}");
-    (tmp, log, file, d)
+    (tmp, log, file, d, service)
+}
+
+/// The phone allows notifications in `browser`, its page being served.
+fn notified(d: &Daemon, browser: &FakeBrowser) {
+    d.set_phone_serving(Some(site().origin), None);
+    d.phone_push_key("nPHONE").unwrap();
+    d.phone_push_subscribe(
+        &phone(),
+        &browser.endpoint,
+        &browser.p256dh(),
+        &browser.auth(),
+    )
+    .unwrap();
+}
+
+/// Asks for the sensitive S with the app not open; the asking.
+fn asked_away(d: &Daemon) -> tokio::task::JoinHandle<Response> {
+    let d = d.clone();
+    tokio::spawn(async move { d.handle(get(Some("dev"), "S", "pw")).await })
+}
+
+/// The request the paired phone's page shows waiting, once one does.
+async fn waiting_on_the_page(d: &Daemon) -> u64 {
+    loop {
+        let page = d.phone_page("nPHONE");
+        if let Some(waiting) = page.prompts.first() {
+            return waiting.prompt.id;
+        }
+        d.phone_page_wait(page.version, Duration::from_secs(30))
+            .await;
+    }
 }
 
 fn pair(machine: &str, pass: &str) -> Request {
@@ -520,4 +570,194 @@ async fn the_page_waits_for_a_change() {
     d.phone_page_wait(seen, Duration::from_secs(30)).await;
     assert_eq!(d.phone_page("nPHONE").prompts, []);
     asked.await.unwrap();
+}
+
+/// A phone that allowed notifications is told of each request it can
+/// approve, in names: what it is for and the program that asks. Only the
+/// paired phone subscribes, and only at a push service a browser uses.
+#[tokio::test]
+async fn the_paired_phone_is_told_of_a_request_it_can_approve() {
+    let (_tmp, log, _file, d, service) = push_daemon().await;
+    paired(&d).await;
+    let browser = FakeBrowser::new();
+
+    assert_eq!(d.phone_push_key("nTABLET"), Err(PhoneError::NotPaired));
+    let key = d.phone_push_key("nPHONE").unwrap();
+    assert_eq!(d.phone_push_key("nPHONE").unwrap(), key, "made once");
+    assert_eq!(
+        d.phone_push_subscribe(
+            &peer("nTABLET", "tablet"),
+            &browser.endpoint,
+            &browser.p256dh(),
+            &browser.auth()
+        ),
+        Err(PhoneError::NotPaired)
+    );
+    assert_eq!(
+        d.phone_push_subscribe(
+            &phone(),
+            "https://push.example.com/one",
+            &browser.p256dh(),
+            &browser.auth()
+        ),
+        Err(PhoneError::Push(PushError::Endpoint))
+    );
+    assert!(!d.phone_page("nPHONE").notified);
+    assert!(!phone_status(&d).await.unwrap().paired.unwrap().notifies);
+
+    notified(&d, &browser);
+    assert!(d.phone_page("nPHONE").notified);
+    assert!(!d.phone_page("nTABLET").notified);
+    let view = phone_status(&d).await.unwrap().paired.unwrap();
+    assert!(view.notifies && view.untold.is_none(), "{view:?}");
+    assert!(
+        logged(&log)
+            .iter()
+            .any(|l| l == "phone notifications allowed")
+    );
+
+    let (asked, pending) = asked_in_the_app(&d, get(Some("dev"), "S", "pw")).await;
+    settle().await;
+    let [message] = &service.sent()[..] else {
+        panic!("{:?}", service.sent())
+    };
+    assert_eq!(message.host, "web.push.apple.com");
+    assert_eq!(message.ttl, 300, "as long as the request waits");
+    let text: serde_json::Value = serde_json::from_slice(&browser.read(&message.body)).unwrap();
+    let program = Path::new(&pending[0].argv[0])
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert_eq!(
+        text,
+        serde_json::json!({
+            "id": pending[0].id,
+            "title": "A command asks for sensitive values of widget/dev",
+            "body": format!("`{program}` waits for you to approve or deny it."),
+        })
+    );
+    d.phone_deny(&phone(), pending[0].id).unwrap();
+    asked.await.unwrap();
+
+    // One that takes the passphrase is answered at the desk: not told.
+    let (asked, pending) = asked_in_the_app(&d, ask_values(&["B"])).await;
+    settle().await;
+    assert_eq!(service.sent().len(), 1);
+    d.phone_deny(&phone(), pending[0].id).unwrap();
+    asked.await.unwrap();
+
+    // Nor is anything told while the page is not served.
+    d.set_phone_serving(None, Some("Tailscale is Stopped, not Running".into()));
+    let (asked, pending) = asked_in_the_app(&d, get(Some("dev"), "S", "pw")).await;
+    settle().await;
+    assert_eq!(service.sent().len(), 1);
+    d.phone_deny(&phone(), pending[0].id).unwrap();
+    asked.await.unwrap();
+}
+
+/// With the app closed, a request the phone can approve waits for the
+/// phone once it is told; one it is not told of is refused as before.
+#[tokio::test]
+async fn a_request_waits_for_the_phone_while_the_app_is_closed() {
+    let (_tmp, _log, _file, d, service) = push_daemon().await;
+    let passkey = paired(&d).await;
+    const NO_APP: &str = "handing it out takes approval in the app, which is not open";
+
+    // No notifications: nobody would know of it.
+    d.set_phone_serving(Some(site().origin), None);
+    let e = error(asked_away(&d).await.unwrap());
+    assert!(e.message.ends_with(NO_APP), "{}", e.message);
+
+    let browser = FakeBrowser::new();
+    notified(&d, &browser);
+    let asked = asked_away(&d);
+    let id = waiting_on_the_page(&d).await;
+    // It goes on waiting, with no app to close.
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert!(!asked.is_finished());
+    let (client, auth, signature) = approval(&d, &passkey, id);
+    d.phone_approve(&site(), &phone(), id, &client, &auth, &signature)
+        .unwrap();
+    let r = asked.await.unwrap();
+    assert!(matches!(r, Response::Value { .. }), "{r:?}");
+    assert_eq!(service.sent().len(), 1);
+
+    // What takes the passphrase is still the app's alone.
+    let e = error(d.handle(ask_values(&["B"])).await);
+    assert!(e.message.contains("which is not open"), "{}", e.message);
+    assert_eq!(service.sent().len(), 1);
+
+    // The push service is not reached: the phone was not told, so the
+    // request does not wait for it.
+    service.answering(Err("no route".into()));
+    let e = error(asked_away(&d).await.unwrap());
+    assert!(e.message.ends_with(NO_APP), "{}", e.message);
+    let view = phone_status(&d).await.unwrap().paired.unwrap();
+    assert!(view.notifies, "{view:?}");
+    assert_eq!(
+        view.untold.as_deref(),
+        Some("the last notification was not sent: no route")
+    );
+
+    // The phone dropped what it gave: it is forgotten here too.
+    service.answering(Ok(Delivery::Gone));
+    let e = error(asked_away(&d).await.unwrap());
+    assert!(e.message.ends_with(NO_APP), "{}", e.message);
+    assert!(!d.phone_page("nPHONE").notified);
+    let view = phone_status(&d).await.unwrap().paired.unwrap();
+    assert!(!view.notifies && view.untold.is_some(), "{view:?}");
+    let sent = service.sent().len();
+    let e = error(asked_away(&d).await.unwrap());
+    assert!(e.message.ends_with(NO_APP), "{}", e.message);
+    assert_eq!(service.sent().len(), sent, "nothing to send to");
+
+    // Allowed again, the next one is taken, and nothing is amiss.
+    service.answering(Ok(Delivery::Taken));
+    notified(&d, &browser);
+    let asked = asked_away(&d);
+    let id = waiting_on_the_page(&d).await;
+    settle().await;
+    let view = phone_status(&d).await.unwrap().paired.unwrap();
+    assert!(view.notifies && view.untold.is_none(), "{view:?}");
+    d.phone_deny(&phone(), id).unwrap();
+    assert_eq!(error_code(asked.await.unwrap()), ErrorCode::NotApproved);
+}
+
+/// What a phone gave for its notifications is for that pairing: removing
+/// the phone, or pairing one again, drops it.
+#[tokio::test]
+async fn notifications_end_with_the_pairing() {
+    let (tmp, _log, _file, d, service) = push_daemon().await;
+    let held = || {
+        let text = std::fs::read(tmp.path().join(push::FILE)).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&text).unwrap();
+        json.get("phone").is_some()
+    };
+    paired(&d).await;
+    let browser = FakeBrowser::new();
+    notified(&d, &browser);
+    assert!(held());
+
+    // Paired again, with another passkey.
+    paired(&d).await;
+    assert!(!held());
+    assert!(!d.phone_page("nPHONE").notified);
+    notified(&d, &browser);
+    assert!(held());
+
+    let r = d
+        .handle(Request::PhoneUnpair {
+            passphrase: pw("pw"),
+        })
+        .await;
+    assert!(matches!(r, Response::Store { .. }), "{r:?}");
+    assert!(!held());
+
+    // Locked, nothing is known of the phone, so nothing is told.
+    paired(&d).await;
+    notified(&d, &browser);
+    d.lock();
+    assert_eq!(d.phone_push_key("nPHONE"), Err(PhoneError::Locked));
+    assert_eq!(service.sent().len(), 0);
 }

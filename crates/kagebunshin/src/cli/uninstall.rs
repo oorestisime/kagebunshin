@@ -272,6 +272,7 @@ pub fn uninstall(
         format!("{}.1", crate::audit::RUNS_FILE),
         "audit.lock".into(),
         crate::daemon::proof::FILE.into(),
+        crate::daemon::push::FILE.into(),
         super::onboard::Record::FILE.into(),
         super::onboard::LeftOut::FILE.into(),
     ]);
