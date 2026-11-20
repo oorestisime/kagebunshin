@@ -4359,6 +4359,9 @@ prefix = "widget/dev/"
 [[envs.dev.sources]]
 provider = "proton"
 prefix = "widget/"
+
+[[envs.local.sources]]
+provider = "file"
 "#;
     let file = StoreFile::new(tmp.path().join(STORE_FILE)).with_test_work_factor();
     let pass = Passphrase::new("pw".into());
@@ -4507,13 +4510,24 @@ prefix = "widget/"
     assert_eq!(items.len(), 3);
     assert!(warnings[0].starts_with("aws_sm: "), "{warnings:?}");
 
-    // Health of the env's providers and the connected ones.
+    // Health of the providers the environment reads.
     let health = d.providers(Some(&facts(None, None)), false).await;
     assert_clean(&c, &health);
     assert!(health.iter().all(|p| p.health == Health::Ok), "{health:?}");
     for p in [Provider::AwsSm, Provider::Proton] {
         assert!(health.iter().any(|h| h.provider == p), "{health:?}");
     }
+    // One that reads only the store is not kept waiting for the others,
+    // connected as they are: asking each is a round trip to it.
+    let asked = fake.calls().lines().count();
+    let health = d.providers(Some(&facts(Some("local"), None)), false).await;
+    let which: Vec<Provider> = health.iter().map(|p| p.provider).collect();
+    assert_eq!(which, [Provider::File]);
+    assert_eq!(fake.calls().lines().count(), asked, "{}", fake.calls());
+    // With no environment on show, the connected ones are asked.
+    let health = d.providers(None, false).await;
+    let which: Vec<Provider> = health.iter().map(|p| p.provider).collect();
+    assert_eq!(which, [Provider::AwsSm, Provider::Proton]);
     fake.expire();
     fake.revoke();
     let health = d.providers(None, false).await;

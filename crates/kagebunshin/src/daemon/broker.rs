@@ -3112,10 +3112,13 @@ impl Daemon {
 
     /// Whether each provider in play can read now: those `facts`'
     /// environment uses, or with no `facts` and `every` those any
-    /// environment of any project uses, then AWS when `connect aws` set a
-    /// default, and Proton when a token is saved. An AWS source is checked
-    /// once for each profile and region in use. The local store and Proton
-    /// are not checked while the daemon is locked.
+    /// environment of any project uses. Where that is not one environment
+    /// (no `facts`, or none of a project here), also AWS when `connect
+    /// aws` set a default, and Proton when a token is saved: asking a
+    /// provider is a round trip to it, and an environment is not kept
+    /// waiting for one it does not read. An AWS source is checked once for
+    /// each profile and region in use. The local store and Proton are not
+    /// checked while the daemon is locked.
     pub async fn providers(&self, facts: Option<&Facts>, every: bool) -> Vec<ProviderStatus> {
         let Ok(registry) = self.registry() else {
             return Vec::new();
@@ -3137,10 +3140,12 @@ impl Daemon {
         for spec in envs.iter().flat_map(|s| &s.sources) {
             wanted.push((spec.provider, spec.aws.clone()));
         }
-        if registry.config.aws != AwsSettings::default() {
+        let one_env = facts.is_some() && !envs.is_empty();
+        if !one_env && registry.config.aws != AwsSettings::default() {
             wanted.push((Provider::AwsSm, registry.config.aws.clone()));
         }
-        if let Some(Some(st)) = &store
+        if !one_env
+            && let Some(Some(st)) = &store
             && st.proton_token().is_some()
         {
             wanted.push((Provider::Proton, AwsSettings::default()));
