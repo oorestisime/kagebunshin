@@ -96,11 +96,12 @@ yourself. A refusal that waits for a human exits 5.
   in to the profile the error names, in the app or with the
   `aws login --profile X` it names, then `kagebunshin sync`.
 - **A sensitive environment, secret or key** (`sensitive_env`): it is off
-  limits unless the human approves that one command in the app, which must
-  be open; `run` then waits for them. Do not ask for it to be
+  limits unless the human approves that one command, in the app or on
+  their paired phone; `run` then waits for them. If it is refused because
+  the app is not open, ask them to open it. Do not ask for it to be
   unmarked.
-- **Not approved** (`not_approved`): the human denied the command in the
-  app, or did not answer in time. Do not retry it without asking them.
+- **Not approved** (`not_approved`): the human denied the command, or did
+  not answer in time. Do not retry it without asking them.
 - **Marking sensitive:** you add a mark yourself, with no passphrase:
   `kagebunshin mark env PROJECT ENV`, `kagebunshin mark secret PROVIDER
   NAME` or `kagebunshin mark key SECTION KEY`. Mark what is production.

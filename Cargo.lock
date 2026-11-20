@@ -2916,7 +2916,7 @@ dependencies = [
 
 [[package]]
 name = "kagebunshin"
-version = "0.0.1-alpha.13"
+version = "0.0.1-alpha.14"
 dependencies = [
  "age",
  "aho-corasick",
@@ -2961,7 +2961,7 @@ dependencies = [
 
 [[package]]
 name = "kagebunshin-app"
-version = "0.0.1-alpha.13"
+version = "0.0.1-alpha.14"
 dependencies = [
  "kagebunshin",
  "qrcodegen",
@@ -2971,7 +2971,7 @@ dependencies = [
 
 [[package]]
 name = "kagebunshin-e2e"
-version = "0.0.1-alpha.13"
+version = "0.0.1-alpha.14"
 dependencies = [
  "aws-config",
  "aws-sdk-secretsmanager",

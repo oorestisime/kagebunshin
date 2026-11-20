@@ -61,7 +61,7 @@ reading the state of site
 
 site ($T/work/site): gave project site the environment production, and put 2 keys from production.env in the local store's [site.production]: API_TOKEN, SITE_URL
   environment production: 2 of 2 keys set
-  needs your agent: mark site.production sensitive: it is production by its name, so its values are handed out only once the human approves the request in the app
+  needs your agent: mark site.production sensitive: it is production by its name, so its values are handed out only once the human approves the request
 
 Then, in each checkout above that is not done, paste this line into your coding agent:
   Set up kagebunshin here: run `kagebunshin next` and do what it says until it says done.
@@ -88,7 +88,7 @@ ok   SITE_URL
 
 $ kagebunshin next
 project site, environment dev: 2 of 2 keys set, proven; an environment named production is left to mark
-next (you): mark site.production sensitive: it is production by its name, so its values are handed out only once the human approves the request in the app
+next (you): mark site.production sensitive: it is production by its name, so its values are handed out only once the human approves the request
   kagebunshin mark env site production
 
 -- a second file for the same environment goes in over the first, and says what it replaced
@@ -99,7 +99,7 @@ Passphrase for the local store (to import 1 env file):
 importing $T/work/site/local.env into [site.dev]
 writing 1 key from 1 file to the local store
 reading the state of site
-{"deleted":[],"not_imported":[],"paste":"Set up kagebunshin here: run `kagebunshin next` and do what it says until it says done.","projects":[{"did":"used the existing project site, whose environment dev reads the local store, and put 1 key from local.env in the local store's [site.dev]: API_TOKEN; 1 of them replaced a value already there: API_TOKEN","dir":"$T/work/site","done":false,"env":"dev","imported":{"files":["$T/work/site/local.env"],"keys":["API_TOKEN"]},"of":2,"project":"site","set":2,"state":["needs your agent"],"step":{"command":"kagebunshin mark env site production","tell":null,"what":"mark site.production sensitive: it is production by its name, so its values are handed out only once the human approves the request in the app","who":"agent"},"tell":[]}],"skipped":[]}
+{"deleted":[],"not_imported":[],"paste":"Set up kagebunshin here: run `kagebunshin next` and do what it says until it says done.","projects":[{"did":"used the existing project site, whose environment dev reads the local store, and put 1 key from local.env in the local store's [site.dev]: API_TOKEN; 1 of them replaced a value already there: API_TOKEN","dir":"$T/work/site","done":false,"env":"dev","imported":{"files":["$T/work/site/local.env"],"keys":["API_TOKEN"]},"of":2,"project":"site","set":2,"state":["needs your agent"],"step":{"command":"kagebunshin mark env site production","tell":null,"what":"mark site.production sensitive: it is production by its name, so its values are handed out only once the human approves the request","who":"agent"},"tell":[]}],"skipped":[]}
 
 -- in a repository of several apps, a file outside every app's folder needs its project named
 
@@ -174,7 +174,7 @@ reading the state of solo-web
 
 solo-web ($T/work/solo/apps/web): gave project solo-web the environment production, and put 1 key from $T/work/solo/production.env in the local store's [solo-web.production]: API_TOKEN
   environment production: 1 of 1 keys set
-  needs your agent: mark solo-web.production sensitive: it is production by its name, so its values are handed out only once the human approves the request in the app
+  needs your agent: mark solo-web.production sensitive: it is production by its name, so its values are handed out only once the human approves the request
 
 Then, in each checkout above that is not done, paste this line into your coding agent:
   Set up kagebunshin here: run `kagebunshin next` and do what it says until it says done.

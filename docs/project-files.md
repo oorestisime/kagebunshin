@@ -568,7 +568,8 @@ look like that. Profile names are split on `-` and `_` as well, so
 Until a human decides, such an environment is sensitive by rule: the
 daemon treats it exactly as if it were marked, with no mark written.
 `run` and `get` hand out its values only once a human approves that
-request in the app, and are refused with exit 5 otherwise. The daemon
+request, in the app or on a paired phone, and are refused with exit 5
+otherwise. The daemon
 decides this when it resolves, so a project file written by hand is
 treated the same. The human decides in the app, which lists every waiting
 environment of every project, with the store passphrase:

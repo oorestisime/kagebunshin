@@ -37,7 +37,7 @@ schema = 1
 
 default_env = "dev"           # the environment used when --env is not given
 idle_timeout = "30m"          # lock after this long without a request; s, m, h or d, at most 30d
-approval_timeout = "5m"       # deny a request nobody answers in the app after this long; s or m, at most 30m
+approval_timeout = "5m"       # deny a request nobody answers after this long; s or m, at most 30m
 default_provider = "file"     # the source an environment with none gets: "file" (the store) or "aws_sm"
 strict_memory = false         # refuse values that cannot be locked in memory, rather than warn
 
@@ -204,7 +204,8 @@ kagebunshin run --machine desk --project widget -- ./bot   # in any folder
   Their requests do not reset the idle timeout. What fixes a refusal
   (unlocking, opening the app, a grant) is done on this machine, and the
   caller is told so.
-- Values marked sensitive still need approving in the app here. The
+- Values marked sensitive still need approving here, in the app or on
+  the [paired phone](#the-approval-page). The
   prompt names the machine and its user, and shows the command line as
   that machine reported it: nothing here can check it. Each machine has
   at most one prompt waiting; a second request is refused.
@@ -229,6 +230,11 @@ sensitive, so you need not be at this computer's keyboard. The daemon
 serves that one phone a small page, and the phone approves one request at
 a time with a passkey, which asks for your face or fingerprint. Nothing
 is installed on the phone but Tailscale.
+
+<p align="center">
+  <img src="img/phone-page.png" width="300"
+       alt="The approval page on a phone: the command that asks, the keys it expects, who asks and why, with Deny and Approve buttons.">
+</p>
 
 It needs:
 

@@ -36,6 +36,11 @@ removes it. Activity is the audit
 log of every project or of one; the runs that needed no approval are not
 in it, and `kagebunshin audit --all` lists them.
 
+<p align="center">
+  <img src="img/phone.png" width="760"
+       alt="The app's Phone view: the paired phone, the address its page is served at, that it is notified of requests, what it last answered, and the tailnet's phones to pair.">
+</p>
+
 Keep agents away from what matters by marking environments, secrets or
 store keys sensitive in the app. Each change takes the passphrase. A
 secret is marked and unmarked on its header in the key list, beside the

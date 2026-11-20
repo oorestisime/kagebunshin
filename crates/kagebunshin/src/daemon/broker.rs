@@ -3598,10 +3598,10 @@ impl Daemon {
                 if !self.inner.remote().prompting.insert(peer.node.clone()) {
                     return Err(ResolveError::Remote {
                         message: format!(
-                            "machine {} already has a request waiting for approval in the app",
+                            "machine {} already has a request waiting for approval",
                             peer.machine
                         ),
-                        hint: Some("answer that one in the app, then try again".into()),
+                        hint: Some("once the human has answered that one, try again".into()),
                     });
                 }
                 Some(Prompting {
@@ -4614,8 +4614,7 @@ pub fn wire_error(e: &ResolveError) -> WireError {
         if named_production(env) {
             WireError::new(ErrorCode::SensitiveEnv, e.to_string())
                 .with_hint(format!(
-                    "{}; its values are then handed out once the human approves the request \
-                     in the app",
+                    "{}; its values are then handed out once the human approves the request",
                     mark_hint(project, env)
                 ))
                 .agent()
@@ -4652,10 +4651,13 @@ pub fn wire_error(e: &ResolveError) -> WireError {
         ResolveError::NotApproved(n) if n.waited.is_some() => {
             WireError::new(ErrorCode::NotApproved, e.to_string())
                 .with_hint(
-                    "run the command again once the human is at the screen: the app's window \
-                     shows this command and takes the store's passphrase",
+                    "run the command again once the human can answer: the app's window, or \
+                     their paired phone, shows this command",
                 )
-                .human("approve the request in the app (`kagebunshin app`) when it asks")
+                .human(
+                    "approve the request when it asks, in the app (`kagebunshin app`) or on \
+                     your paired phone",
+                )
         }
         ResolveError::NotApproved(_)
         | ResolveError::Import(ImportRefusal::Denied)

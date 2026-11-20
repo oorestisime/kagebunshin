@@ -318,17 +318,17 @@ is left for you as `human`, in the same shape, when there is any.
 What needs the store passphrase (`get`, `unlock`, store writes other than
 an `onboard` you approve in the app or a `store set` whose values you type
 there, which are refused with `no_app` while the app is closed); `status` and `diff` of an environment marked sensitive; and any `run` that would
-inject a sensitive key, unless you approve it in the app (the whole command
+inject a sensitive key, unless you approve it in the app or on your paired phone (the whole command
 waits, not just that key). Each comes back with an error code, a hint, and
 who can fix it: `agent` when the agent can run the command itself, `human`
 with a `tell`, one sentence for the agent to pass on to you as it is, such
 as "unlock kagebunshin: run `kagebunshin unlock` in a terminal". In text it
 is the line `ask the human: ...`. A refusal that waits for you (locked,
-sensitive, production-looking, not approved) exits 5. A request the app
-asked about and that was not approved says how it ended (a person denied
+sensitive, production-looking, not approved) exits 5. A request that
+waited for approval and was not approved says how it ended (a person denied
 it, or nobody answered in time) and what it asked for: after a denial, ask
 the human before running it again; after a timeout, run it again once they
-are at the screen.
+can answer.
 
 With `--json`, an error is one line of
 `{"code", "message", "hint", "who", "tell"}` on stderr and each warning one
