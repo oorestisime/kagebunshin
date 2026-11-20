@@ -18,10 +18,6 @@ What is left of v1 is release work:
   the machine that asked, and no token. `pass-cli` shows a token's expiry
   only in human-readable output, so `connect proton --expires` is typed
   by hand until it has a machine-readable form.
-- Approving on a phone: run this build from a real phone, notifications
-  included. So far the page ran in tests and a desktop browser, where a
-  notification sent through Google's push service arrived, and an
-  earlier prototype of it on an iPhone.
 - macOS: run it for real. CI builds and tests it and the Release
   workflow ships an arm64 tarball, but no one has yet set it up on a Mac
   from one: the service, the app and its approvals are untried there.

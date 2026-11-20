@@ -422,10 +422,10 @@ What it does not cover:
   it cannot approve without the passkey.
 - Tailscale's HTTPS puts this machine's tailnet name in the public
   certificate logs.
-- This build of the page has run only in tests and a desktop browser
-  with a software passkey, where a notification sent through Google's
-  push service arrived. An earlier prototype of the same design approved
-  requests from a real iPhone and notified it through Apple's.
+- The page has run from one real phone: an iPhone, notified through
+  Apple's push service, which approved requests with the app open and
+  with it closed. Android and other browsers have run only in tests; a
+  desktop Chromium was notified through Google's push service.
 
 ## Known limitations
 
