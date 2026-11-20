@@ -1765,6 +1765,60 @@ async fn concurrent_requests_share_one_fetch() {
     assert_eq!(fake.fetches(), 3);
 }
 
+/// A store write drops from the cache only what it can have changed: an
+/// environment that reads the section written, or every one when a secret
+/// is marked. The rest is not fetched again.
+#[tokio::test]
+async fn a_store_write_keeps_what_it_cannot_have_changed() {
+    let fake = FakeSources::new();
+    fake.set("widget.dev", &[("A", "1")])
+        .set("widget/dev/x", &[("B", "1")])
+        .set("widget/staging", &[("C", "1")]);
+    let (_tmp, d) = marked_daemon(WIDGET, &fake, |_| {}).await;
+    let read = || async {
+        d.hand_out(&facts(None, None)).await.unwrap();
+        d.hand_out(&facts(Some("staging"), None)).await.unwrap();
+        fake.fetches()
+    };
+    // dev has three sources, staging one.
+    assert_eq!(read().await, 4);
+    let wrote = |r: Response| assert!(matches!(r, Response::Store { .. }), "{r:?}");
+    let set = |section: &str| Request::StoreSet {
+        section: section.parse().unwrap(),
+        key: key("K"),
+        value: WireSecret::new("v".into()),
+        passphrase: pw("pw"),
+        sensitive: false,
+    };
+
+    // Another project's section, and what is not a value at all.
+    wrote(d.handle(set("gadget.dev")).await);
+    wrote(
+        d.handle(Request::AcknowledgeEnvs {
+            envs: vec!["widget.rc".parse().unwrap()],
+            passphrase: pw("pw"),
+        })
+        .await,
+    );
+    assert_eq!(read().await, 4, "neither reads what was written");
+
+    // The section dev's file source reads: dev again, staging not.
+    wrote(d.handle(set("widget.dev")).await);
+    assert_eq!(read().await, 7);
+    assert_eq!(read().await, 7);
+
+    // A secret marked sensitive: all of them, as before.
+    wrote(
+        d.handle(Request::MarkSecret {
+            secret: sm("widget/elsewhere"),
+            sensitive: true,
+            passphrase: pw("pw"),
+        })
+        .await,
+    );
+    assert_eq!(read().await, 11);
+}
+
 #[tokio::test]
 async fn sync_refetches() {
     let fake = FakeSources::new();
@@ -3694,10 +3748,14 @@ secret = "widget/DB_URL"
         }
     );
 
+    let listings = || fake.calls().matches("vault list").count();
+    let before = listings();
     let run = d.run_env(&facts(None, None)).await.unwrap();
     let keys: Vec<&str> = run.vars.iter().map(|v| v.key.as_str()).collect();
     assert_eq!(keys, ["DB_URL", "OPENAI_API_KEY", "STRIPE_KEY"]);
     assert!(run.vars.iter().all(|v| v.value.expose() == c.value()));
+    // dev has two Proton sources: the account is read once for both.
+    assert_eq!(listings(), before + 1, "{}", fake.calls());
     assert!(!fake.calls().contains("token-in-env"), "{}", fake.calls());
 
     // Each is the item its ids say, and shown by the name a project file

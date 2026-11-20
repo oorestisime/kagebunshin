@@ -708,15 +708,28 @@ async fn with_token<T: Send + 'static>(
         .map_err(|e| provider(format!("pass-cli call stopped: {e}")))?
 }
 
+/// Every API key the token reads, read once and shared by the sources of
+/// one backend. Reading them takes a `pass-cli` call for each vault and
+/// each item, so an environment with several Proton sources reads them
+/// once, not once for each source.
+type Account = Arc<tokio::sync::OnceCell<Arc<Vec<Key>>>>;
+
 pub struct ProtonBackend {
     cli: PassCli,
     /// The local store as the daemon decrypted it, holding the token.
     store: Option<Arc<Store>>,
+    /// What its sources read. A backend is made for one request, so this
+    /// is never older than the request it serves.
+    account: Account,
 }
 
 impl ProtonBackend {
     pub fn new(cli: PassCli, store: Option<Arc<Store>>) -> Self {
-        Self { cli, store }
+        Self {
+            cli,
+            store,
+            account: Account::default(),
+        }
     }
 }
 
@@ -781,7 +794,7 @@ impl Backend for ProtonBackend {
             store: self.store.clone(),
             select: spec.select.clone(),
             optional: spec.optional,
-            read: Mutex::new(None),
+            account: self.account.clone(),
         })
     }
 }
@@ -791,11 +804,24 @@ pub struct ProtonSource {
     store: Option<Arc<Store>>,
     select: Select,
     optional: bool,
-    /// What [`Source::names`] read, for [`Source::fetch`].
-    read: Mutex<Option<Vec<Key>>>,
+    /// What its backend's sources read; see [`Account`].
+    account: Account,
 }
 
 impl ProtonSource {
+    /// The account's API keys: read now if no source of this backend has
+    /// yet. A read that fails is not kept, so the next source tries again.
+    async fn keys(&self) -> Result<Arc<Vec<Key>>, SourceError> {
+        self.account
+            .get_or_try_init(|| async {
+                with_token(&self.cli, self.store.as_ref(), index)
+                    .await
+                    .map(Arc::new)
+            })
+            .await
+            .cloned()
+    }
+
     fn picks(&self, keys: &[Key]) -> Result<Vec<String>, SourceError> {
         let has = |n: &str| keys.iter().any(|k| k.name == n);
         let named = |names: Vec<&String>| {
@@ -843,18 +869,11 @@ impl Source for ProtonSource {
     }
 
     async fn names(&self) -> Result<Vec<String>, SourceError> {
-        let keys = with_token(&self.cli, self.store.as_ref(), index).await?;
-        let names = self.picks(&keys)?;
-        *self.read.lock().unwrap_or_else(|e| e.into_inner()) = Some(keys);
-        Ok(names)
+        self.picks(&self.keys().await?)
     }
 
     async fn fetch(&self, names: &[String]) -> Result<Vec<Entry>, SourceError> {
-        let cached = self.read.lock().unwrap_or_else(|e| e.into_inner()).take();
-        let keys = match cached {
-            Some(k) => k,
-            None => with_token(&self.cli, self.store.as_ref(), index).await?,
-        };
+        let keys = self.keys().await?;
         let rename = match &self.select {
             Select::Secret { key, .. } => key.clone(),
             _ => None,
@@ -1042,6 +1061,47 @@ mod tests {
         assert!(!calls.contains("token-in-env"), "{calls}");
         assert!(!calls.contains(c.value()), "the token is never an argument");
         assert_eq!(fake.env(), format!("{} fs", fake.session_dir().display()));
+    }
+
+    /// The sources of one backend read the account once between them: an
+    /// environment with two Proton sources does not list every vault and
+    /// view every item twice. Another backend, as another request makes,
+    /// reads it again.
+    #[tokio::test]
+    async fn the_sources_of_one_backend_read_the_account_once() {
+        let c = Canary::new();
+        let (_d, fake) = fake(&c);
+        let listings = || fake.calls().matches("vault list").count();
+        // Logged in first, so a read is one listing.
+        let first = ProtonBackend::new(fake.cli(), Some(store(&fake.token)));
+        first.list("").await.unwrap();
+        let before = listings();
+
+        let backend = ProtonBackend::new(fake.cli(), Some(store(&fake.token)));
+        let stripe = backend.source(&spec(secret("widget/STRIPE_KEY")));
+        let db = backend.source(&spec(secret("widget/DB_URL")));
+        let (a, b) = tokio::join!(stripe.read_all(), db.read_all());
+        assert_eq!(
+            a.unwrap()[0].value.expose(),
+            format!("stripe-{}", c.value())
+        );
+        assert_eq!(b.unwrap()[0].value.expose(), format!("db-{}", c.value()));
+        assert_eq!(listings(), before + 1, "{}", fake.calls());
+
+        let again = ProtonBackend::new(fake.cli(), Some(store(&fake.token)));
+        let db = again.source(&spec(secret("widget/DB_URL")));
+        db.read_all().await.unwrap();
+        assert_eq!(listings(), before + 2, "{}", fake.calls());
+
+        // A read that fails is not kept: the next source reads again.
+        let failing = ProtonBackend::new(fake.cli(), Some(store("pst_wrong::key")));
+        fake.expire();
+        let first = failing.source(&spec(secret("widget/DB_URL")));
+        assert!(first.read_all().await.is_err());
+        let failed = listings();
+        let second = failing.source(&spec(secret("widget/DB_URL")));
+        assert!(second.read_all().await.is_err());
+        assert!(listings() > failed, "{}", fake.calls());
     }
 
     #[tokio::test]

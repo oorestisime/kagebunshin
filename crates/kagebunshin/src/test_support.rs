@@ -189,7 +189,9 @@ enum FakeSecret {
 /// starts, so a fetch held at a [`Gate`] returns what was set before it.
 pub struct FakeSources {
     secrets: Mutex<BTreeMap<String, FakeSecret>>,
-    fetches: AtomicUsize,
+    /// Sources made to fetch with, counted so tests see how many fetches
+    /// started.
+    fetches: Arc<AtomicUsize>,
     /// Secrets whose values were read, counted once per read.
     reads: Arc<AtomicUsize>,
     /// What fetches starting now wait on.
@@ -203,7 +205,7 @@ impl Default for FakeSources {
         let open = watch::Sender::new(true);
         Self {
             secrets: Mutex::default(),
-            fetches: AtomicUsize::new(0),
+            fetches: Arc::default(),
             reads: Arc::default(),
             gate: Mutex::new(open.subscribe()),
             open,
@@ -287,28 +289,17 @@ impl SourceFactory for FakeSources {
         Ok(Box::new(FakeBackend {
             provider,
             secrets: self.secrets.lock().unwrap().clone(),
+            fetches: self.fetches.clone(),
             reads: self.reads.clone(),
             gate: self.gate.lock().unwrap().clone(),
         }))
-    }
-
-    /// Counted, so tests see how many fetches started.
-    async fn build(
-        &self,
-        spec: &SourceSpec,
-        store: Option<&Arc<Store>>,
-    ) -> Result<Box<dyn Source>, SourceError> {
-        self.fetches.fetch_add(1, Ordering::SeqCst);
-        Ok(self
-            .backend(spec.provider, &spec.aws, store)
-            .await?
-            .source(spec))
     }
 }
 
 struct FakeBackend {
     provider: Provider,
     secrets: BTreeMap<String, FakeSecret>,
+    fetches: Arc<AtomicUsize>,
     reads: Arc<AtomicUsize>,
     gate: watch::Receiver<bool>,
 }
@@ -351,6 +342,7 @@ impl Backend for FakeBackend {
     }
 
     fn source(&self, spec: &SourceSpec) -> Box<dyn Source> {
+        self.fetches.fetch_add(1, Ordering::SeqCst);
         Box::new(FakeSource {
             spec: spec.clone(),
             secrets: self.secrets.clone(),
