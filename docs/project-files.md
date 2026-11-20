@@ -455,10 +455,12 @@ with `PROTON_PASS_KEY_PROVIDER` as you set it, else `fs`. The token reaches
 hours; a call that fails on an expired session logs in again and is
 retried once.
 
-Reading Proton takes one `pass-cli` call for the vaults, one for each
-vault and one for each item in it, each a round trip to Proton, so the
-first read of an environment takes a few seconds. An environment reads
-the account once, however many Proton sources it has. What it read stays
+Reading Proton takes one `pass-cli` call for the vaults and one for each
+vault, which lists its items with their content; each call is a round
+trip to Proton, so the first read of an environment takes a second or
+two. A session that may not list items with their content, as an
+agent's may not, views each item instead, a call for each. An
+environment reads the account once, however many Proton sources it has. What it read stays
 cached until the daemon locks, `kagebunshin sync` runs, a secret is
 marked or unmarked, or another token is connected; storing a value in
 the local store does not make a Proton or AWS environment read again.

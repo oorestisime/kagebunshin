@@ -252,6 +252,7 @@ impl Proton {
             bin: fake.bin(),
             session_dir: Some(root.join("data/kagebunshin/proton")),
             key_provider: "fs".into(),
+            listing: kagebunshin::source::proton::Listing::default(),
         };
         let daemon = kagebunshin::daemon::Daemon::new(
             Box::new(move || kagebunshin::config::Registry::load(&config)),

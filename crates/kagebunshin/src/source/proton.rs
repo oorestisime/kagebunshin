@@ -26,12 +26,15 @@
 //! in use.
 //!
 //! The variable name lives inside the item, so learning a key's name reads
-//! the whole item, value included. [`ProtonSource::names`] keeps those
-//! values, as [`SecretValue`]s, only until the resolver has checked the
-//! names and asks for them; nothing else sees them.
+//! the whole item, value included: a vault's items are listed with their
+//! content, one call for the vault, and where `pass-cli` does not list
+//! them so each is viewed. What was read is kept, as [`SecretValue`]s,
+//! only while the sources of one request pick their keys from it; nothing
+//! else sees it.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -80,7 +83,39 @@ pub struct PassCli {
     /// `None` when neither `XDG_DATA_HOME` nor `HOME` is set.
     pub session_dir: Option<PathBuf>,
     pub key_provider: String,
+    pub listing: Listing,
 }
+
+/// Whether `pass-cli` was found not to list a vault's items with their
+/// content, so that each is viewed instead: learned from the first call
+/// it refuses, and until another token is connected. Every copy of one
+/// [`PassCli`] shares it, and it is no part of how `pass-cli` runs: any
+/// two are equal.
+#[derive(Debug, Clone, Default)]
+pub struct Listing(Arc<AtomicBool>);
+
+impl Listing {
+    fn one_by_one(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
+    }
+
+    fn view_each(&self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+
+    /// Another token's session may list what this one's did not.
+    fn forget(&self) {
+        self.0.store(false, Ordering::Relaxed);
+    }
+}
+
+impl PartialEq for Listing {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for Listing {}
 
 impl PassCli {
     /// From `KAGEBUNSHIN_PASS_CLI`, `XDG_DATA_HOME`, `HOME` and
@@ -97,6 +132,7 @@ impl PassCli {
             key_provider: var(KEY_PROVIDER_ENV)
                 .and_then(|v| v.into_string().ok())
                 .unwrap_or_else(|| "fs".into()),
+            listing: Listing::default(),
         }
     }
 
@@ -210,16 +246,30 @@ impl PassCli {
         token: &SecretValue,
         args: &[&str],
     ) -> Result<Zeroizing<Vec<u8>>, SourceError> {
+        self.ask(token, args)?.map_err(provider)
+    }
+
+    /// As [`Self::call`], telling a call that `pass-cli` refuses while the
+    /// session works, which is its inner error and says why, from one that
+    /// could not be made.
+    fn ask(
+        &self,
+        token: &SecretValue,
+        args: &[&str],
+    ) -> Result<Result<Zeroizing<Vec<u8>>, String>, SourceError> {
         let _one = CALLS.lock().unwrap_or_else(|e| e.into_inner());
+        let refused = match self.run(args, None) {
+            Ok(out) => return Ok(Ok(out)),
+            Err(Failed::Exit { message }) => message,
+            Err(other) => return Err(other.into()),
+        };
+        if self.run(&["info"], None).is_ok() {
+            return Ok(Err(refused));
+        }
+        self.login(token)?;
         match self.run(args, None) {
-            Ok(out) => Ok(out),
-            Err(Failed::Exit { message }) => {
-                if self.run(&["info"], None).is_ok() {
-                    return Err(provider(message));
-                }
-                self.login(token)?;
-                self.run(args, None).map_err(SourceError::from)
-            }
+            Ok(out) => Ok(Ok(out)),
+            Err(Failed::Exit { message }) => Ok(Err(message)),
             Err(other) => Err(other.into()),
         }
     }
@@ -231,6 +281,7 @@ impl PassCli {
     /// Not safe to run twice at once: the daemon runs one at a time.
     pub fn stage(&self, token: &SecretValue) -> Result<Staged, SourceError> {
         let _one = CALLS.lock().unwrap_or_else(|e| e.into_inner());
+        self.listing.forget();
         let live = self.live()?.to_owned();
         let staged = Staged {
             dir: beside(&live, "staging"),
@@ -601,11 +652,116 @@ pub struct Key {
     value: SecretValue,
 }
 
-/// Every API key item in every vault the token can read, by name.
+/// The custom items of the vault shared as `share`, each with its
+/// content, from one call; none where `pass-cli` does not give them that
+/// way. An agent's session may not ask for them, and a `pass-cli` that
+/// does not know how refuses the call: `cli` remembers that, and the items
+/// are then viewed one by one.
+fn whole(
+    cli: &PassCli,
+    token: &SecretValue,
+    share: &str,
+) -> Result<Option<Vec<Value>>, SourceError> {
+    if cli.listing.one_by_one() {
+        return Ok(None);
+    }
+    let asked = cli.ask(
+        token,
+        &[
+            "item",
+            "list",
+            "--share-id",
+            share,
+            "--filter-type",
+            ITEM_TYPE,
+            "--output",
+            "json",
+            "--show-secrets",
+        ],
+    )?;
+    let items = match asked {
+        Ok(out) => items(&json(&out, "item list")?),
+        Err(message) => {
+            tracing::info!(%message, "pass-cli does not list items with their content; viewing each");
+            cli.listing.view_each();
+            return Ok(None);
+        }
+    };
+    // Listed without their content after all: it is in each one's view.
+    if items.iter().any(|item| item.get("content").is_none()) {
+        cli.listing.view_each();
+        return Ok(None);
+    }
+    Ok(Some(items))
+}
+
+fn items(list: &Value) -> Vec<Value> {
+    list.get("items")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn trashed(item: &Value) -> bool {
+    str_at(item, "state").is_some_and(|s| s.to_ascii_lowercase().contains("trash"))
+}
+
+/// The API key that `item` is, read from `content` (the item as it is
+/// listed with its content, or its view), if it is one: its two fields,
+/// and a name an environment variable can have.
+fn api_key(vault: &str, share: &str, item: &Value, content: &Value) -> Option<Key> {
+    let id = str_at(item, "id")?;
+    let share = str_at(item, "share_id").unwrap_or(share);
+    let mut found = Vec::new();
+    fields(content, &mut found);
+    let field = |want: &str| {
+        found
+            .iter()
+            .find(|(n, _)| n.trim().eq_ignore_ascii_case(want))
+            .map(|(_, t)| *t)
+    };
+    let (name, value) = (field(NAME_FIELD)?, field(VALUE_FIELD)?);
+    let origin = Origin::new(Provider::Proton, format!("{share}/{id}"));
+    let Ok(key) = name.trim().parse::<KeyName>() else {
+        // The field itself is not shown, in case a value was pasted
+        // where the name belongs.
+        tracing::warn!(item = %origin, "skipping a Proton API key whose name is not a valid environment variable name");
+        return None;
+    };
+    let name = format!("{vault}/{key}");
+    let title = str_at(item, "title").or_else(|| str_at(item.get("content")?, "title"));
+    Some(Key {
+        // Its ids say which item it is; people see its name.
+        origin: origin.named(&name),
+        name,
+        title: title.map(str::to_owned),
+        key,
+        value: SecretValue::new(value.to_owned()),
+    })
+}
+
+/// Every API key item in every vault the token can read, by name: a call
+/// for the vaults and one for each vault, which lists its items with
+/// their content. Where `pass-cli` does not list them so (see [`whole`]),
+/// each vault's items are listed and then viewed, a call for each.
 fn index(cli: &PassCli, token: &SecretValue) -> Result<Vec<Key>, SourceError> {
     let mut keys = Vec::new();
     let out = cli.call(token, &["vault", "list", "--output", "json"])?;
     for (vault, share) in vaults(&out)? {
+        if let Some(items) = whole(cli, token, &share)? {
+            for item in items.iter().filter(|item| !trashed(item)) {
+                // The kind of item is the name of what its content holds.
+                let custom = item
+                    .get("content")
+                    .and_then(|c| c.get("content"))
+                    .and_then(Value::as_object)
+                    .is_none_or(|kinds| kinds.keys().any(|k| k.eq_ignore_ascii_case(ITEM_TYPE)));
+                if custom {
+                    keys.extend(api_key(&vault, &share, item, item));
+                }
+            }
+            continue;
+        }
         let out = cli.call(
             token,
             &[
@@ -619,29 +775,21 @@ fn index(cli: &PassCli, token: &SecretValue) -> Result<Vec<Key>, SourceError> {
                 "json",
             ],
         )?;
-        let list = json(&out, "item list")?;
-        let items = list
-            .get("items")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        for item in &items {
+        for item in &items(&json(&out, "item list")?) {
             let (Some(id), Some(kind)) = (str_at(item, "id"), str_at(item, "item_type")) else {
                 continue;
             };
-            let trashed =
-                str_at(item, "state").is_some_and(|s| s.to_ascii_lowercase().contains("trash"));
-            if !kind.eq_ignore_ascii_case(ITEM_TYPE) || trashed {
+            if !kind.eq_ignore_ascii_case(ITEM_TYPE) || trashed(item) {
                 continue;
             }
-            let share = str_at(item, "share_id").unwrap_or(&share);
+            let of = str_at(item, "share_id").unwrap_or(&share);
             let out = cli.call(
                 token,
                 &[
                     "item",
                     "view",
                     "--share-id",
-                    share,
+                    of,
                     "--item-id",
                     id,
                     "--output",
@@ -649,33 +797,7 @@ fn index(cli: &PassCli, token: &SecretValue) -> Result<Vec<Key>, SourceError> {
                 ],
             )?;
             let view = json(&out, "item view")?;
-            let mut found = Vec::new();
-            fields(&view, &mut found);
-            let field = |want: &str| {
-                found
-                    .iter()
-                    .find(|(n, _)| n.trim().eq_ignore_ascii_case(want))
-                    .map(|(_, t)| *t)
-            };
-            let (Some(name), Some(value)) = (field(NAME_FIELD), field(VALUE_FIELD)) else {
-                continue;
-            };
-            let origin = Origin::new(Provider::Proton, format!("{share}/{id}"));
-            let Ok(key) = name.trim().parse::<KeyName>() else {
-                // The field itself is not shown, in case a value was pasted
-                // where the name belongs.
-                tracing::warn!(item = %origin, "skipping a Proton API key whose name is not a valid environment variable name");
-                continue;
-            };
-            let name = format!("{vault}/{key}");
-            keys.push(Key {
-                // Its ids say which item it is; people see its name.
-                origin: origin.named(&name),
-                name,
-                title: str_at(item, "title").map(str::to_owned),
-                key,
-                value: SecretValue::new(value.to_owned()),
-            });
+            keys.extend(api_key(&vault, &share, item, &view));
         }
     }
     keys.sort_by(|a, b| (&a.name, &a.origin).cmp(&(&b.name, &b.origin)));
@@ -1102,6 +1224,95 @@ mod tests {
         let second = failing.source(&spec(secret("widget/DB_URL")));
         assert!(second.read_all().await.is_err());
         assert!(listings() > failed, "{}", fake.calls());
+    }
+
+    /// A vault's items come with their content from one call, so reading
+    /// the account takes a call for the vaults and one for each vault,
+    /// however many items they hold. An item made from Proton Pass's API
+    /// key template, whose fields sit beside its content, is read too.
+    #[tokio::test]
+    async fn a_vault_is_read_in_one_call() {
+        let c = Canary::new();
+        let (_d, fake) = fake(&c);
+        fake.template_key(
+            "S1",
+            "i9",
+            "TEMPLATE_KEY",
+            &format!("template-{}", c.value()),
+        );
+        let backend = ProtonBackend::new(fake.cli(), Some(store(&fake.token)));
+        // Logged in first, so the calls counted are one read's own.
+        backend.list("").await.unwrap();
+        std::fs::remove_file(fake.root().join("calls")).unwrap();
+
+        let entries = ProtonBackend::new(fake.cli(), Some(store(&fake.token)))
+            .source(&spec(Select::Prefix("widget/".into())))
+            .read_all()
+            .await
+            .unwrap();
+        let got: Vec<(&str, &str)> = entries
+            .iter()
+            .map(|e| (e.key.as_str(), e.value.expose()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("DB_URL", &*format!("db-{}", c.value())),
+                ("STRIPE_KEY", &*format!("stripe-{}", c.value())),
+                ("TEMPLATE_KEY", &*format!("template-{}", c.value())),
+            ]
+        );
+        assert_eq!(
+            fake.calls().lines().collect::<Vec<_>>(),
+            [
+                "vault list --output json",
+                "item list --share-id S1 --filter-type custom --output json --show-secrets",
+                "item list --share-id S2 --filter-type custom --output json --show-secrets",
+            ]
+        );
+    }
+
+    /// An agent's session may not list items with their content: each is
+    /// then viewed, as before, with the same result. That is found out
+    /// once, and asked again only when another token is connected.
+    #[tokio::test]
+    async fn a_session_that_may_not_list_content_views_each_item() {
+        let c = Canary::new();
+        let (_d, fake) = fake(&c);
+        fake.template_key(
+            "S1",
+            "i9",
+            "TEMPLATE_KEY",
+            &format!("template-{}", c.value()),
+        );
+        fake.agent();
+        let cli = fake.cli();
+        let read = || async {
+            let listed = ProtonBackend::new(cli.clone(), Some(store(&fake.token)))
+                .list("widget/")
+                .await
+                .unwrap();
+            listed.into_iter().map(|l| l.name).collect::<Vec<_>>()
+        };
+        let names = ["widget/DB_URL", "widget/STRIPE_KEY", "widget/TEMPLATE_KEY"];
+        assert_eq!(read().await, names);
+        let asked = || fake.calls().matches("--show-secrets").count();
+        assert_eq!(asked(), 1, "{}", fake.calls());
+        assert!(
+            fake.calls()
+                .contains("item view --share-id S1 --item-id i9")
+        );
+
+        assert_eq!(read().await, names);
+        assert_eq!(asked(), 1, "found out once: {}", fake.calls());
+
+        // Another token is another session, which may.
+        std::fs::remove_file(fake.root().join("agent")).unwrap();
+        cli.stage(&SecretValue::new(fake.token.clone())).unwrap();
+        let views = || fake.calls().matches("item view").count();
+        let viewed = views();
+        assert_eq!(read().await, names);
+        assert_eq!(views(), viewed, "{}", fake.calls());
     }
 
     #[tokio::test]

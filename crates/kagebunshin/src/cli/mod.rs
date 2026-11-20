@@ -126,6 +126,9 @@ pub enum Command {
         dirs: Vec<PathBuf>,
     },
     /// Show the daemon and where each key comes from
+    ///
+    /// Also whether each provider the environment reads can read now. Run
+    /// outside a project, it says that of every provider that is connected.
     Status {
         /// Ask machine MACHINE's daemon over Tailscale instead of this one's,
         /// sending its grant's token from KAGEBUNSHIN_REMOTE_TOKEN; with

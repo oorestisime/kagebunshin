@@ -478,6 +478,8 @@ pub struct FakePassCli {
     pub token: String,
     vaults: Mutex<Vec<serde_json::Value>>,
     items: Mutex<BTreeMap<String, Vec<serde_json::Value>>>,
+    /// As `items`, each with its content: what `--show-secrets` lists.
+    whole: Mutex<BTreeMap<String, Vec<serde_json::Value>>>,
 }
 
 const FAKE_PASS_CLI: &str = r#"#!/bin/sh
@@ -498,18 +500,24 @@ case "$1" in
   logout) rm -f "$S"; exit 0;;
 esac
 [ -e "$S" ] || { echo "error: session expired, log in again" >&2; exit 1; }
-cmd=$1; sub=$2; share=; item=
+cmd=$1; sub=$2; share=; item=; whole=
 while [ $# -gt 0 ]; do
   case "$1" in
     --share-id) share=$2; shift;;
     --item-id) item=$2; shift;;
+    --show-secrets) whole=1;;
   esac
   shift
 done
+if [ -n "$whole" ] && [ -e "$F/agent" ]; then
+  echo "error: --show-secrets is not allowed with agent sessions" >&2; exit 1
+fi
 case "$cmd $sub" in
   "info "*) echo "logged in";;
   "vault list") cat "$F/vaults.json";;
-  "item list") cat "$F/items-$share.json" 2>/dev/null || echo '{"items":[],"folders":[]}';;
+  "item list")
+    if [ -n "$whole" ]; then list="$F/whole-$share.json"; else list="$F/items-$share.json"; fi
+    cat "$list" 2>/dev/null || echo '{"items":[],"folders":[]}';;
   "item view") cat "$F/item-$share-$item.json" || exit 1;;
   *) echo "error: unknown command $cmd $sub" >&2; exit 2;;
 esac
@@ -528,6 +536,7 @@ impl FakePassCli {
             token: token.to_owned(),
             vaults: Mutex::default(),
             items: Mutex::default(),
+            whole: Mutex::default(),
         };
         fake.write("vaults.json", &serde_json::json!({ "vaults": [] }));
         fake
@@ -555,6 +564,7 @@ impl FakePassCli {
             bin: self.bin(),
             session_dir: Some(self.session_dir()),
             key_provider: "fs".into(),
+            listing: crate::source::proton::Listing::default(),
         }
     }
 
@@ -567,6 +577,18 @@ impl FakePassCli {
 
     /// An item of type `kind` whose type-specific content is `content`.
     pub fn item(&self, share: &str, id: &str, kind: &str, content: serde_json::Value) -> &Self {
+        self.item_with(share, id, kind, content, serde_json::json!([]))
+    }
+
+    /// As [`Self::item`], with the fields `extra` beside its content.
+    fn item_with(
+        &self,
+        share: &str,
+        id: &str,
+        kind: &str,
+        content: serde_json::Value,
+        extra: serde_json::Value,
+    ) -> &Self {
         let title = format!("item {id}");
         let mut items = self.items.lock().unwrap();
         let list = items.entry(share.to_owned()).or_default();
@@ -583,14 +605,50 @@ impl FakePassCli {
             "note" => "Note",
             _ => "Custom",
         };
+        // Listed with its content, an item has no `item_type` or `title`
+        // of its own: the content says both.
+        let mut whole = self.whole.lock().unwrap();
+        let list = whole.entry(share.to_owned()).or_default();
+        list.push(serde_json::json!({
+            "id": id, "share_id": share, "vault_id": format!("v-{share}"),
+            "content": {
+                "title": title, "note": "", "item_uuid": id,
+                "content": { variant: content.clone() }, "extra_fields": extra.clone(),
+            },
+            "state": "Active", "flags": [],
+        }));
+        self.write(
+            &format!("whole-{share}.json"),
+            &serde_json::json!({ "items": list, "folders": [] }),
+        );
         self.write(
             &format!("item-{share}-{id}.json"),
             &serde_json::json!({ "item": {
                 "id": id, "share_id": share,
-                "content": { "title": title, "note": "", "content": { variant: content } },
+                "content": {
+                    "title": title, "note": "", "content": { variant: content },
+                    "extra_fields": extra,
+                },
             }}),
         );
         self
+    }
+
+    /// An API key item as Proton Pass's own template makes one: nothing in
+    /// the custom content, and both fields beside it, hidden, among others.
+    pub fn template_key(&self, share: &str, id: &str, key: &str, value: &str) -> &Self {
+        self.item_with(
+            share,
+            id,
+            "custom",
+            serde_json::json!({ "sections": [] }),
+            serde_json::json!([
+                { "name": "API key", "content": { "Hidden": key } },
+                { "name": "Secret", "content": { "Hidden": value } },
+                { "name": "Expiry Date", "content": { "Timestamp": 0 } },
+                { "name": "Permissions", "content": { "Text": "" } },
+            ]),
+        )
     }
 
     /// An API key item: a custom item whose `name_field` holds `key` and
@@ -613,6 +671,12 @@ impl FakePassCli {
                 { "name": "Secret", "content": { "Hidden": value } },
             ]}]}),
         )
+    }
+
+    /// From now on the session is an agent's, which may not list items
+    /// with their content.
+    pub fn agent(&self) {
+        std::fs::write(self.root.join("agent"), "").unwrap();
     }
 
     /// Ends the session at the next call, as two hours passing would.
