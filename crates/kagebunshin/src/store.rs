@@ -425,6 +425,22 @@ impl Store {
     }
 
     /// Every section, in name order.
+    /// Whether the sections `pick` chooses are the same here and in
+    /// `other`: the same sections, each with the same keys and values.
+    pub fn same_sections(&self, other: &Self, pick: impl Fn(&Section) -> bool) -> bool {
+        let ours: Vec<_> = self.sections.iter().filter(|(s, _)| pick(s)).collect();
+        let theirs: Vec<_> = other.sections.iter().filter(|(s, _)| pick(s)).collect();
+        ours.len() == theirs.len()
+            && ours.iter().zip(&theirs).all(|((s, keys), (t, others))| {
+                s == t
+                    && keys.len() == others.len()
+                    && keys
+                        .iter()
+                        .zip(others.iter())
+                        .all(|((k, v), (l, w))| k == l && v.expose() == w.expose())
+            })
+    }
+
     pub fn sections(&self) -> impl Iterator<Item = (&Section, &BTreeMap<KeyName, SecretValue>)> {
         self.sections.iter()
     }

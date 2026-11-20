@@ -48,9 +48,9 @@ use super::proof::Proofs;
 use super::push::PushState;
 use super::resolve::{
     EnvValues, ImportRefusal, Refusal, ResolveError, SourceFactory, Unapproved, add_as_one_key,
-    duplicate_warnings, env_error, fetch_env, is_sensitive, mark_hint, named_production, prod_like,
-    prod_like_profile, refuse_sensitive, secret_marked, unmarked_warnings, waiting_envs,
-    waiting_message, waiting_message_remote, waiting_tell,
+    duplicate_warnings, env_error, fetch_env, fetched_alike, is_sensitive, mark_hint,
+    named_production, prod_like, prod_like_profile, refuse_sensitive, secret_marked,
+    unmarked_warnings, waiting_envs, waiting_message, waiting_message_remote, waiting_tell,
 };
 use super::shared::{Claim, Sharing, shared_secrets};
 use crate::audit::{AuditLog, Decision, Event};
@@ -2605,16 +2605,28 @@ impl Daemon {
         })
     }
 
-    /// Makes `store` the session's, dropping every cached environment as
-    /// [`Self::sync`] does: their warnings were made against the old marks,
-    /// and a store source's values are the old ones.
+    /// Makes `store` the session's. A cached environment stays only if it
+    /// would be fetched the same with this store ([`fetched_alike`]): one
+    /// that reads a section that changed has old values, and one fetched
+    /// under other marks may look like production differently. The rest
+    /// are dropped as [`Self::sync`] drops them, and so is every fetch
+    /// still running, which reads the old store.
     fn replace_store(&self, store: Store) {
         if let Phase::Unlocked(session) = &mut self.inner.state().phase {
-            session.store = Some(Arc::new(store));
+            let store = Arc::new(store);
+            let old = session.store.replace(store.clone());
             session.superseded.retain(|a| !a.is_finished());
-            for slot in std::mem::take(&mut session.cache).into_values() {
-                if let Slot::Fetching { abort, .. } = slot {
-                    session.superseded.push(abort);
+            for (key, slot) in std::mem::take(&mut session.cache) {
+                match slot {
+                    Slot::Fetching { abort, .. } => session.superseded.push(abort),
+                    Slot::Ready(values) => {
+                        let stands = old
+                            .as_deref()
+                            .is_some_and(|old| fetched_alike(&values.sources, old, &store));
+                        if stands {
+                            session.cache.insert(key, Slot::Ready(values));
+                        }
+                    }
                 }
             }
         }

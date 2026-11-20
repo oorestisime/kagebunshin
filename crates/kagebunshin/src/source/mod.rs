@@ -136,7 +136,9 @@ pub trait Backend: Send + Sync {
 
     async fn status(&self) -> ProviderStatus;
 
-    /// The source that fetches what `spec` selects.
+    /// The source that fetches what `spec` selects. The sources of one
+    /// backend may share what they read, so a backend is made for one
+    /// request and not kept.
     fn source(&self, spec: &SourceSpec) -> Box<dyn Source>;
 }
 

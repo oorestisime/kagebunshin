@@ -27,7 +27,7 @@ use crate::source::aws_sm::sdk::SdkSm;
 use crate::source::aws_sm::{AwsBackend, SmApi, arn_secret_name, secret_id};
 use crate::source::file::FileBackend;
 use crate::source::proton::{PassCli, ProtonBackend};
-use crate::source::{Backend, Problem, Resolved, Skip, Source, SourceError, merge, stable_origin};
+use crate::source::{Backend, Problem, Resolved, Skip, SourceError, merge, stable_origin};
 use crate::store::{Section, Store, StoreError};
 use crate::types::{EnvName, KeyName, Origin, ProjectName, Provider};
 
@@ -203,6 +203,45 @@ fn prod_like_env<'a>(
         })
 }
 
+/// Whether an environment fetched from `sources` would be fetched the same
+/// with the store `new` as it was with `old`, apart from what its other
+/// providers hold: so what the daemon cached of it still stands once `new`
+/// replaces `old`. That takes three things of the store:
+///
+/// - the secrets and prefixes marked sensitive, which
+///   [`EnvValues::prod_like`] skips, are the same;
+/// - every section a `file` source reads is the same, with the same keys
+///   and values, and no section it would read was added or removed;
+/// - the Proton token, for a Proton source, is the same.
+///
+/// The marks on environments and store keys, and the acknowledgements, are
+/// read from the store at each request and are not part of what is cached.
+pub fn fetched_alike(sources: &[SourceSpec], old: &Store, new: &Store) -> bool {
+    let marks = old.marked_secrets().eq(new.marked_secrets())
+        && old.marked_prefixes().eq(new.marked_prefixes());
+    fn token(st: &Store) -> Option<&str> {
+        st.proton_token().map(|t| t.token.expose())
+    }
+    marks
+        && sources.iter().all(|spec| match spec.provider {
+            Provider::AwsSm => true,
+            Provider::Proton => token(old) == token(new),
+            Provider::File => match &spec.select {
+                // Refused by the source: nothing of it is cached.
+                Select::Secret { key: Some(_), .. } => false,
+                Select::Secret { name, key: None } => {
+                    old.same_sections(new, |s| s.to_string() == *name)
+                }
+                Select::Secrets(names) => {
+                    old.same_sections(new, |s| names.contains(&s.to_string()))
+                }
+                Select::Prefix(p) => {
+                    old.same_sections(new, |s| s.to_string().starts_with(p.as_str()))
+                }
+            },
+        })
+}
+
 /// The one sentence said of an environment that looks like production
 /// (`why`) and that no human has marked sensitive or acknowledged as not
 /// production: it waits for their decision.
@@ -317,17 +356,6 @@ pub trait SourceFactory: Send + Sync {
         store: Option<&Arc<Store>>,
     ) -> Result<Box<dyn Backend>, SourceError>;
 
-    async fn build(
-        &self,
-        spec: &SourceSpec,
-        store: Option<&Arc<Store>>,
-    ) -> Result<Box<dyn Source>, SourceError> {
-        Ok(self
-            .backend(spec.provider, &spec.aws, store)
-            .await?
-            .source(spec))
-    }
-
     /// How `pass-cli` runs, for `connect proton`; `None` where Proton is
     /// not read through it.
     fn pass_cli(&self) -> Option<&PassCli> {
@@ -355,10 +383,11 @@ impl AwsClients for SdkClients {
 /// Pass through `pass-cli`.
 ///
 /// Every AWS source gets a client for its own profile and region, so one
-/// environment can mix profiles and one daemon can serve several at once.
-/// Clients are not kept between fetches: each fetch reads the AWS
-/// configuration afresh, so a profile added or a login done while the daemon
-/// runs is picked up.
+/// environment can mix profiles and one daemon can serve several at once;
+/// the sources of one environment that read with the same profile and
+/// region share theirs. Clients are not kept between fetches: each fetch
+/// reads the AWS configuration afresh, so a profile added or a login done
+/// while the daemon runs is picked up.
 pub struct Providers {
     aws: Box<dyn AwsClients>,
     proton: PassCli,
@@ -985,8 +1014,35 @@ pub async fn fetch_env(
     store: Option<&Arc<Store>>,
     patterns: &[SourcePattern],
 ) -> Result<EnvValues, ResolveError> {
+    // One backend for each provider and AWS login the sources read with:
+    // what a backend's sources share is then read once for the
+    // environment, as Proton's account is, and not once for each source.
+    let mut logins: Vec<(Provider, &AwsSettings)> = Vec::new();
+    for spec in sources {
+        if !logins.contains(&(spec.provider, &spec.aws)) {
+            logins.push((spec.provider, &spec.aws));
+        }
+    }
+    let backends = join_all(
+        logins
+            .iter()
+            .map(|(provider, aws)| factory.backend(*provider, aws, store)),
+    )
+    .await;
+    let (logins, backends) = (&logins, &backends);
     let listed = join_all(sources.iter().map(|spec| async move {
-        let source = factory.build(spec, store).await?;
+        let shared = logins
+            .iter()
+            .position(|login| *login == (spec.provider, &spec.aws))
+            .and_then(|at| backends.get(at));
+        let source = match shared {
+            Some(Ok(backend)) => backend.source(spec),
+            // Its backend could not be made: this source says why itself.
+            _ => factory
+                .backend(spec.provider, &spec.aws, store)
+                .await?
+                .source(spec),
+        };
         let names = source.names().await?;
         Ok::<_, SourceError>((source, names))
     }))
@@ -1118,6 +1174,116 @@ pub async fn fetch_env(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::secret::SecretValue;
+    use crate::store::ProtonToken;
+
+    /// What is cached of an environment stands across a store write only
+    /// if the write cannot have changed what its sources read or how it
+    /// is described: a section a file source reads, the Proton token, or
+    /// the secrets marked sensitive.
+    #[test]
+    fn a_store_write_changes_only_what_reads_what_it_wrote() {
+        let set = |st: &mut Store, section: &str, key: &str, value: &str| {
+            st.set(
+                section.parse().unwrap(),
+                key.parse().unwrap(),
+                SecretValue::new(value.into()),
+            );
+        };
+        let token = |st: &mut Store, token: &str| {
+            st.set_proton_token(ProtonToken {
+                token: SecretValue::new(token.into()),
+                expires: None,
+            });
+        };
+        let base = || {
+            let mut st = Store::default();
+            set(&mut st, "widget.dev", "A", "1");
+            set(&mut st, "gadget.dev", "A", "1");
+            token(&mut st, "pst_one");
+            st
+        };
+        let spec = |provider, select| SourceSpec::new(provider, select, false);
+        let secret = |name: &str| Select::Secret {
+            name: name.into(),
+            key: None,
+        };
+        let aws = [spec(Provider::AwsSm, Select::Prefix("widget/dev/".into()))];
+        let own = [spec(Provider::File, secret("widget.dev"))];
+        let both = [aws[0].clone(), own[0].clone()];
+        let under = [spec(Provider::File, Select::Prefix("widget.".into()))];
+        let several = [spec(
+            Provider::File,
+            Select::Secrets(vec!["widget.dev".into(), "widget.qa".into()]),
+        )];
+        let proton = [spec(Provider::Proton, secret("widget/DB_URL"))];
+        let all = [&aws[..], &own, &both, &under, &several, &proton];
+        // Which of `all` stand once `change` is made.
+        let stand = |change: &dyn Fn(&mut Store)| -> Vec<bool> {
+            let (old, mut new) = (base(), base());
+            change(&mut new);
+            all.iter().map(|s| fetched_alike(s, &old, &new)).collect()
+        };
+
+        // Nothing changed, or what no source here reads: all stand.
+        assert_eq!(stand(&|_| {}), [true; 6]);
+        assert_eq!(stand(&|st| set(st, "gadget.dev", "B", "2")), [true; 6]);
+        assert_eq!(
+            stand(&|st| {
+                st.mark_env("widget.dev".parse().unwrap(), true);
+                st.acknowledge_env("widget.rc".parse().unwrap(), true);
+                st.set_remote_enabled(true);
+            }),
+            [true; 6],
+            "read from the store at each request, not cached"
+        );
+        // A value of a section, a key added to it, a section added under
+        // a prefix or among those named: whatever reads it is fetched again.
+        let reads_dev = [true, false, false, false, false, true];
+        assert_eq!(stand(&|st| set(st, "widget.dev", "A", "2")), reads_dev);
+        assert_eq!(stand(&|st| set(st, "widget.dev", "B", "1")), reads_dev);
+        assert_eq!(
+            stand(&|st| {
+                st.unset(&"widget.dev".parse().unwrap(), &"A".parse().unwrap())
+                    .unwrap();
+            }),
+            reads_dev
+        );
+        assert_eq!(
+            stand(&|st| set(st, "widget.qa", "A", "1")),
+            [true, true, true, false, false, true]
+        );
+        // Another token reads another account.
+        assert_eq!(
+            stand(&|st| token(st, "pst_two")),
+            [true, true, true, true, true, false]
+        );
+        // A secret marked or unmarked may change why an environment looks
+        // like production: nothing stands.
+        assert_eq!(
+            stand(&|st| {
+                st.mark_secret(Origin::new(Provider::AwsSm, "widget/prod/db"), true)
+                    .unwrap();
+            }),
+            [false; 6]
+        );
+        assert_eq!(
+            stand(&|st| {
+                st.mark_prefix(Origin::new(Provider::AwsSm, "widget/prod/"))
+                    .unwrap();
+            }),
+            [false; 6]
+        );
+        // `key` is refused by the file provider: never taken as unchanged.
+        let keyed = [spec(
+            Provider::File,
+            Select::Secret {
+                name: "widget.dev".into(),
+                key: Some("A".parse().unwrap()),
+            },
+        )];
+        assert!(!fetched_alike(&keyed, &base(), &base()));
+    }
 
     /// What a source that names a secret it cannot read is told to do.
     /// Only a step an agent can take on its own is a command in backquotes.

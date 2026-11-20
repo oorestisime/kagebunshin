@@ -1,9 +1,12 @@
 //! Talking to the daemon off the main thread.
 //!
 //! A [`Worker`] thread owns the [`DaemonClient`] and carries out one [`Job`]
-//! at a time, in order, waking the window when each answer lands. Jobs and
-//! answers carry the [`Attempt`] that asked, so the state machine can drop
-//! answers it no longer waits for. Every reply but two carries key names and
+//! at a time, in order, waking the window when each answer lands. A job
+//! that only reads (an environment's keys, the providers) runs beside it
+//! on a thread of its own, so it waits for no other job and none waits for
+//! it: one environment that is slow to read does not hold back the next.
+//! Jobs and answers carry the [`Attempt`] that asked, so the state machine
+//! can drop answers it no longer waits for. Every reply but two carries key names and
 //! origins only: [`Job::Reveal`] fetches one value a person asked to see,
 //! and [`Job::RotateGrant`] the new token of a remote grant, each held as
 //! a [`WireSecret`], zeroed on drop and never shown by `Debug`. The
@@ -37,6 +40,12 @@ use rune::machine::Attempt;
 /// Sends one request to the daemon and waits for its reply.
 pub trait DaemonClient: Send {
     fn request(&mut self, req: Request) -> Result<Response, ClientError>;
+
+    /// Another client of the same daemon, to ask with while this one
+    /// waits for an answer; none where requests are answered in order.
+    fn beside(&self) -> Option<Box<dyn DaemonClient>> {
+        None
+    }
 }
 
 /// The real daemon, on a fresh connection per request: an idle window holds
@@ -48,6 +57,12 @@ pub struct SocketClient {
 impl DaemonClient for SocketClient {
     fn request(&mut self, req: Request) -> Result<Response, ClientError> {
         Client::connect(&self.socket, DEFAULT_TIMEOUT)?.request(req)
+    }
+
+    fn beside(&self) -> Option<Box<dyn DaemonClient>> {
+        Some(Box::new(SocketClient {
+            socket: self.socket.clone(),
+        }))
     }
 }
 
@@ -699,6 +714,13 @@ fn env(client: &mut dyn DaemonClient, facts: Facts) -> Result<EnvReport, Problem
 pub struct Worker {
     jobs: mpsc::Sender<(Attempt, Job)>,
     answers: mpsc::Receiver<(Attempt, Answer)>,
+    /// Where an answer goes, and what tells the window it is there: for
+    /// the jobs that run beside the thread.
+    outbox: mpsc::Sender<(Attempt, Answer)>,
+    waker: Waker,
+    /// Makes the client of a job that runs beside the thread; none where
+    /// the daemon's client answers in order only.
+    reader: Option<Box<dyn DaemonClient>>,
 }
 
 impl Worker {
@@ -706,23 +728,59 @@ impl Worker {
     pub fn spawn(mut client: Box<dyn DaemonClient>, waker: Waker) -> Result<Self, Problem> {
         let (jobs, inbox) = mpsc::channel::<(Attempt, Job)>();
         let (outbox, answers) = mpsc::channel();
+        let reader = client.beside();
+        let (out, wake) = (outbox.clone(), waker.clone());
         std::thread::Builder::new()
             .name("kagebunshin-daemon".into())
             .spawn(move || {
                 for (attempt, job) in inbox {
-                    if outbox.send((attempt, run(&mut *client, job))).is_err() {
+                    if out.send((attempt, run(&mut *client, job))).is_err() {
                         return;
                     }
-                    waker();
+                    wake();
                 }
             })
             .map_err(|e| Problem::new(format!("cannot start the daemon thread: {e}")))?;
-        Ok(Self { jobs, answers })
+        Ok(Self {
+            jobs,
+            answers,
+            outbox,
+            waker,
+            reader,
+        })
     }
 
+    /// A job that only reads and changes nothing runs on a thread of its
+    /// own, so its answer may come in any order with the others'. What
+    /// changes the daemon, and the probe that says what it changed, wait
+    /// their turn on the worker's thread.
     pub fn send(&self, attempt: Attempt, job: Job) {
-        // The thread only stops when this side is dropped.
-        let _ = self.jobs.send((attempt, job));
+        let failed: Option<fn(Problem) -> Answer> = match job {
+            Job::Env { .. } => Some(|p| Answer::Env(Err(p))),
+            Job::Providers => Some(|p| Answer::Providers(Err(p))),
+            _ => None,
+        };
+        let client = self.reader.as_ref().and_then(|r| r.beside());
+        let Some((failed, mut client)) = failed.zip(client) else {
+            // The thread only stops when this side is dropped.
+            let _ = self.jobs.send((attempt, job));
+            return;
+        };
+        let (out, wake) = (self.outbox.clone(), self.waker.clone());
+        let started = std::thread::Builder::new()
+            .name("kagebunshin-read".into())
+            .spawn(move || {
+                if out.send((attempt, run(&mut *client, job))).is_ok() {
+                    wake();
+                }
+            });
+        if let Err(e) = started {
+            // The job went with the thread that did not start: its answer
+            // is that the daemon was not asked.
+            let problem = Problem::new(format!("cannot start a thread to ask the daemon: {e}"));
+            let _ = self.outbox.send((attempt, failed(problem)));
+            (self.waker)();
+        }
     }
 
     /// Every answer that has landed, oldest first.
@@ -1547,5 +1605,99 @@ mod tests {
             (Attempt(1), Answer::Probe(Ok(Probed::locked(true))))
         );
         assert!(matches!(answers[1], (Attempt(2), Answer::Probe(Err(_)))));
+    }
+
+    /// A daemon that holds back what it says of environment `slow` until
+    /// told to go on, answers the rest at once, and lends clients to ask
+    /// with meanwhile, as the real one does.
+    #[derive(Clone, Default)]
+    struct Held {
+        go: Arc<(Mutex<bool>, std::sync::Condvar)>,
+    }
+
+    impl Held {
+        fn release(&self) {
+            *self.go.0.lock().unwrap() = true;
+            self.go.1.notify_all();
+        }
+    }
+
+    impl DaemonClient for Held {
+        fn request(&mut self, req: Request) -> Result<Response, ClientError> {
+            let slow = matches!(
+                &req,
+                Request::Status { facts: Some(f) } if f.env.as_ref().is_some_and(|e| e.as_str() == "slow")
+            );
+            if slow {
+                let (held, released) = &*self.go;
+                let _go = released
+                    .wait_while(held.lock().unwrap(), |go| !*go)
+                    .unwrap();
+            }
+            Ok(match req {
+                Request::Providers { .. } => Response::Providers {
+                    providers: Vec::new(),
+                },
+                _ => Response::Status(StatusReport {
+                    locked: true,
+                    env: None,
+                    expiring: Vec::new(),
+                    remote: None,
+                    waiting: Vec::new(),
+                    acknowledged: Vec::new(),
+                    shared: Vec::new(),
+                    app: false,
+                    phone: None,
+                }),
+            })
+        }
+
+        fn beside(&self) -> Option<Box<dyn DaemonClient>> {
+            Some(Box::new(self.clone()))
+        }
+    }
+
+    /// An environment that is slow to read holds back nothing else: the
+    /// other environments, the providers and the probe are answered while
+    /// it is still being read, and it is answered when it has been.
+    #[test]
+    fn a_slow_read_holds_back_no_other_job() {
+        let daemon = Held::default();
+        let (woke, wakes) = mpsc::channel();
+        let waker: Waker = Arc::new(move || {
+            let _ = woke.send(());
+        });
+        let worker = Worker::spawn(Box::new(daemon.clone()), waker).unwrap();
+        let env = |name: &str| Job::Env {
+            facts: Facts {
+                env: Some(name.parse().unwrap()),
+                ..facts(None)
+            },
+        };
+        worker.send(Attempt(1), env("slow"));
+        worker.send(Attempt(2), env("dev"));
+        worker.send(Attempt(3), Job::Providers);
+        worker.send(Attempt(4), Job::Probe);
+        let timeout = std::time::Duration::from_secs(5);
+        for _ in 0..3 {
+            wakes.recv_timeout(timeout).unwrap();
+        }
+        let mut answers = worker.answers();
+        answers.sort_by_key(|(attempt, _)| attempt.0);
+        assert_eq!(
+            answers,
+            [
+                (Attempt(2), Answer::Env(Ok(EnvReport::Locked))),
+                (Attempt(3), Answer::Providers(Ok(Vec::new()))),
+                (Attempt(4), Answer::Probe(Ok(Probed::locked(true)))),
+            ]
+        );
+
+        daemon.release();
+        wakes.recv_timeout(timeout).unwrap();
+        assert_eq!(
+            worker.answers(),
+            [(Attempt(1), Answer::Env(Ok(EnvReport::Locked)))]
+        );
     }
 }
