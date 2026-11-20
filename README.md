@@ -225,8 +225,9 @@ and tests them: expect rough edges there.
 AWS Secrets Manager and the local store are in daily use. Proton Pass
 has handed values from a real vault to a bot on another machine, through
 the remote endpoint; that is one run, not daily use yet. Approving on a
-phone is new: its design approved requests from a real iPhone as a
-prototype, notifications included; this build has not yet. The app is
+phone is new: an iPhone was paired, notified and approved requests, with
+the app open and with it closed; that is a first run, not daily use
+yet. The app is
 experimental: its UI library is pinned to a
 prerelease commit.
 
