@@ -824,7 +824,7 @@ fn mark_step(w: &WaitingEnv) -> Step {
     agent(
         format!(
             "mark {project}.{env} sensitive: it is production by its name, so its values are \
-             handed out only once the human approves the request in the app"
+             handed out only once the human approves the request"
         ),
         Some(format!("kagebunshin mark env {project} {env}")),
     )
@@ -864,7 +864,7 @@ fn decide_step(w: &WaitingEnv, shared: &[SharedSecret]) -> Step {
         format!(
             "Please open the kagebunshin app and decide about {project}.{env}, which looks like \
              production ({why}): mark it sensitive, or acknowledge it is not production. Until \
-             then a run with it is refused, or asks you in the app.{sharing}"
+             then a run with it is refused, or waits for your approval.{sharing}"
         ),
     )
 }

@@ -5591,7 +5591,7 @@ async fn a_remote_machine_waits_on_one_prompt_at_a_time() {
     assert_eq!(e.code, ErrorCode::PermissionDenied);
     assert_eq!(
         e.message,
-        "machine laptop already has a request waiting for approval in the app"
+        "machine laptop already has a request waiting for approval"
     );
     let r = d
         .handle(Request::Approve {

@@ -374,8 +374,8 @@ pub enum Command {
     },
     /// Mark an environment, a secret or a store key sensitive
     ///
-    /// A marked value is handed out only once a human approves that request
-    /// in the app. Takes no passphrase, so an agent can run it; the daemon
+    /// A marked value is handed out only once a human approves that request,
+    /// in the app or on a paired phone. Takes no passphrase, so an agent can run it; the daemon
     /// must be unlocked. The mark holds at once and is in the audit log.
     /// Only a human removes one, in the app, with the store passphrase.
     Mark {

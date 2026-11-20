@@ -69,8 +69,8 @@ secret, only that it is there.
   and runs everything through kagebunshin from then on. You are asked only
   for what shows a human is there: a passphrase, an approval.
 - **Production waits for you.** What is marked sensitive, an agent cannot
-  get by itself. The command waits while the app shows you what asks for
-  which keys, and you approve that one request. Every refusal and every
+  get by itself. The command waits while the app, or your paired phone,
+  shows you what asks for which keys, and you approve that one request. Every refusal and every
   hand-out of a marked value goes in an audit log, by name.
 
 <p align="center">
@@ -90,7 +90,7 @@ sequenceDiagram
     R->>D: this project's keys
     D->>S: reads them
     S-->>D: values
-    Note over D: Marked sensitive?<br/>Waits until you approve in the app
+    Note over D: Marked sensitive?<br/>Waits until you approve,<br/>in the app or on your phone
     D-->>R: values
     R->>R: runs npm test with them<br/>in its environment
     R-->>A: output, values masked
@@ -158,7 +158,7 @@ see [docs/manual-setup.md](docs/manual-setup.md).
 | The agent | You |
 |---|---|
 | `kagebunshin run -- npm test`: a command, with its secrets | `kagebunshin unlock`, after a reboot or the idle timeout |
-| `kagebunshin status`: which keys are set and where from, never a value | Approve, in the app, a request for something marked sensitive |
+| `kagebunshin status`: which keys are set and where from, never a value | Approve a request for something marked sensitive, in the app or on your phone |
 | `kagebunshin next`: what is left to set up, and whose step it is | `kagebunshin app`: keys by environment, sources, marks, the audit log |
 | Marks what is production as sensitive | The only one who can remove a mark |
 
@@ -182,6 +182,11 @@ passkey: your face or fingerprint in place of the passphrase. It is
 notified of a request, which then waits for it even with the app closed.
 See
 [docs/config.md](docs/config.md#the-approval-page).
+
+<p align="center">
+  <img src="docs/img/phone-page.png" width="300"
+       alt="The approval page on a phone: the command that asks, the keys it expects, who asks and why, with Deny and Approve buttons.">
+</p>
 
 ## What it does not do
 
@@ -215,7 +220,7 @@ they need and keeps the values with the original.
 ## Status
 
 > [!NOTE]
-> **Alpha**; the latest build is v0.0.1-alpha.13.
+> **Alpha**; the latest build is v0.0.1-alpha.14.
 
 There are binaries for Linux x86_64 and aarch64 (glibc 2.35 or later)
 and for macOS arm64. The macOS
@@ -240,7 +245,7 @@ prerelease commit.
 | [Manual setup](docs/manual-setup.md) | The same setup, by hand |
 | [The app](docs/app.md) | The app, the tray and approvals |
 | [Project files](docs/project-files.md) | Project mapping files, sources and sensitivity |
-| [Configuration](docs/config.md) | `config.toml`, directories, environment variables, the service |
+| [Configuration](docs/config.md) | `config.toml`, directories, environment variables, the service, the remote endpoint and the phone's approval page |
 | [Threat model](docs/threat-model.md) | What is protected, from whom, and the known gaps |
 | [Memory](docs/memory.md) | How values are kept in memory |
 | [Roadmap](docs/roadmap.md) | What is agreed and not built yet |

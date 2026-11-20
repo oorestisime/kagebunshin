@@ -747,15 +747,15 @@ pub enum ResolveError {
     /// nobody answered it.
     #[error("{}", unapproved_text(.0))]
     NotApproved(Box<Unapproved>),
-    /// The process that asked ended while its request waited in the app.
+    /// The process that asked ended while its request waited for a person.
     #[error(
         "environment {env} of project {project}: the command that asked for its values ended \
-         before the app answered"
+         before a person answered"
     )]
     CallerGone { project: ProjectName, env: EnvName },
     #[error(
-        "environment {env} of project {project}: approved in the app, but its sources or the \
-         keys marked sensitive changed while waiting; ask again"
+        "environment {env} of project {project}: approved, but its sources or the keys \
+         marked sensitive changed while waiting; ask again"
     )]
     ApprovalChanged { project: ProjectName, env: EnvName },
     #[error("no request {0} waits for approval; it was answered, or it timed out")]

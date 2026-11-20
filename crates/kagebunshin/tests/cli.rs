@@ -775,7 +775,7 @@ fn a_production_looking_environment_waits_for_a_human() {
     );
     let hint = "it is production by its name: mark it sensitive with `kagebunshin mark env \
                 widget prod`; its values are then handed out once the human approves the \
-                request in the app";
+                request";
     assert_eq!(e["hint"], hint);
     // The text form ends with the command that marks it.
     let o = w.kb("widget", &["--env", "prod", "run", "--", "true"]);

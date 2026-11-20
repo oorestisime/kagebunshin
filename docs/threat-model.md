@@ -295,7 +295,8 @@ passphrase; see [config.md](config.md#the-remote-endpoint). Then:
 - A remote caller may `run`, `status` and `diff`; never `get`, `unlock`,
   store writes, project edits or grants. A locked daemon refuses it, and
   its requests do not keep the daemon unlocked.
-- A marked value goes through the same approval in the app here. The
+- A marked value goes through the same approval here, in the app or on
+  the paired phone. The
   prompt names the machine and its user. Each machine has at most one
   prompt waiting.
 - The audit log records the machine, its user and tags with each request

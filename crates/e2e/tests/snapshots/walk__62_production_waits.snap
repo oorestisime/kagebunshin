@@ -15,11 +15,11 @@ added a source to environment production of project api; it replaces the default
 
 $ kagebunshin --env production run -- ./test.sh
 kagebunshin: environment production of project api looks like production (its name has the segment production) and waits for a human decision
-hint: it is production by its name: mark it sensitive with `kagebunshin mark env api production`; its values are then handed out once the human approves the request in the app
+hint: it is production by its name: mark it sensitive with `kagebunshin mark env api production`; its values are then handed out once the human approves the request
 [exit 5]
 
 $ kagebunshin --json --env production run -- ./test.sh
-{"code":"sensitive_env","message":"environment production of project api looks like production (its name has the segment production) and waits for a human decision","hint":"it is production by its name: mark it sensitive with `kagebunshin mark env api production`; its values are then handed out once the human approves the request in the app","who":"agent","tell":null}
+{"code":"sensitive_env","message":"environment production of project api looks like production (its name has the segment production) and waits for a human decision","hint":"it is production by its name: mark it sensitive with `kagebunshin mark env api production`; its values are then handed out once the human approves the request","who":"agent","tell":null}
 [exit 5]
 
 $ kagebunshin --env production status
@@ -45,12 +45,12 @@ warning: environment production of project api looks like production (its name h
 
 $ kagebunshin --env production next
 project api, environment production: 2 of 5 keys set, and it is production by its name: mark it sensitive
-next (you): mark api.production sensitive: it is production by its name, so its values are handed out only once the human approves the request in the app
+next (you): mark api.production sensitive: it is production by its name, so its values are handed out only once the human approves the request
   kagebunshin mark env api production
 
 $ kagebunshin next
 project api, environment dev: 5 of 5 keys set, proven; an environment named production is left to mark
-next (you): mark api.production sensitive: it is production by its name, so its values are handed out only once the human approves the request in the app
+next (you): mark api.production sensitive: it is production by its name, so its values are handed out only once the human approves the request
   kagebunshin mark env api production
 
 -- the agent marks it: no passphrase, no human
@@ -116,7 +116,7 @@ $ kagebunshin --env rc next
 project api, environment rc: 0 of 5 keys set, and it waits for the human's decision in the app
 waiting on the human; tell them:
   - Please run `kagebunshin store set api.rc API_KEY API_URL DATABASE_URL SIGNING_KEY` in a terminal; it asks for the store passphrase, then each value.
-  - Please open the kagebunshin app and decide about api.rc, which looks like production (its name has the segment rc): mark it sensitive, or acknowledge it is not production. Until then a run with it is refused, or asks you in the app.
+  - Please open the kagebunshin app and decide about api.rc, which looks like production (its name has the segment rc): mark it sensitive, or acknowledge it is not production. Until then a run with it is refused, or waits for your approval.
 nothing more you can do until the human has done the above
 
 $ kagebunshin project add-env shop prod
@@ -148,8 +148,8 @@ ask the human: open the app (`kagebunshin app`), so a request for values marked 
 
 $ kagebunshin --env prod run -- ./test.sh
 kagebunshin: environment prod of project api: nobody answered the request within 3 seconds, so nothing was handed out. It asked for every value of the environment, which is marked sensitive
-hint: run the command again once the human is at the screen: the app's window shows this command and takes the store's passphrase
-ask the human: approve the request in the app (`kagebunshin app`) when it asks
+hint: run the command again once the human can answer: the app's window, or their paired phone, shows this command
+ask the human: approve the request when it asks, in the app (`kagebunshin app`) or on your paired phone
 [exit 5]
 
 -- the human clicks Deny
