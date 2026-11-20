@@ -173,6 +173,21 @@ request:
 | a value marked sensitive, to get or run | approval in the app, with the passphrase, or on the paired phone, with its passkey |
 | status, diff of an environment marked sensitive | refused |
 
+How the passphrase is checked depends on whether the daemon is locked.
+To unlock, and while locked, the daemon decrypts the store with it, which
+takes a second or more and up to a gigabyte of memory by design: that
+cost per guess is what guards a copy of `store.age`. Unlocked, the daemon
+holds the store decrypted already, and checks a passphrase against a
+verifier it made when the store was decrypted: a salted scrypt hash of
+it, kept in memory only and dropped when the daemon locks. That takes
+about a twentieth of a second. After three wrong passphrases in a row
+each further check waits first, a quarter of a second and then twice as
+long each time up to five seconds, until a right one is given; checks
+are made one at a time. A write of the store still encrypts it anew,
+which costs what decrypting it does; it starts from the store the
+daemon holds, and decrypts the file first only if the file is not the
+one the daemon last read or wrote.
+
 `status` and `diff` may name a `store set` command for keys no source
 sets. It names keys only; the human runs it, with the passphrase, and
 types each value at a prompt or pipes them in, never as an argument. Run
@@ -452,6 +467,14 @@ What it does not cover:
   read when the environment was marked: one added later is not covered
   until you mark it, or the environment again. Closing all of this needs
   config the agent cannot write, such as another user or a signed config.
+- While it is unlocked the daemon keeps a verifier of the passphrase in
+  memory, which costs far less to try a passphrase against than a copy
+  of `store.age` does. Whoever can read the daemon's memory has the
+  decrypted store from the same place; with the verifier they can also
+  look for the passphrase itself, which the daemon does not otherwise
+  keep. A local process cannot read it where the daemon is not
+  dumpable, and can try passphrases only through the daemon, which
+  makes it wait.
 - Some decoded secret bytes are freed without being zeroed. serde_json's
   decode buffer for a Secrets Manager JSON secret is not zeroed. Neither is
   the age crate's decryption buffer for the store (`age` 0.11

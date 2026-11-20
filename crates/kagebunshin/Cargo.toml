@@ -45,6 +45,9 @@ rustls = { version = "0.23.46", default-features = false, features = ["aws-lc-rs
 # The certificate authorities this machine trusts, to check a phone's push
 # service with; the version the AWS SDK's HTTPS client already brings in.
 rustls-native-certs = "0.8.5"
+# The same scrypt the store's age encryption uses, for the check of a
+# passphrase the daemon keeps in memory while unlocked.
+scrypt = { version = "0.11.0", default-features = false }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 # The store keeps a remote grant's token as its SHA-256, compared in

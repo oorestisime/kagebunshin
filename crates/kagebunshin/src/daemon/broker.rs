@@ -66,7 +66,8 @@ use crate::ipc::protocol::{
 use crate::source::aws_sm::AwsSettings;
 use crate::source::{Health, Listed, ProviderStatus};
 use crate::store::{
-    Change, Passphrase, ProtonToken, RemoteGrant, Section, Store, StoreError, StoreFile, TokenHash,
+    Change, Held, Passphrase, ProtonToken, RemoteGrant, Section, Store, StoreError, StoreFile,
+    TokenHash, Verifier,
 };
 use crate::tailnet::LocalApi;
 use crate::types::{EnvName, KeyName, Origin, ProjectName, Provider};
@@ -1008,6 +1009,38 @@ struct Session {
     store: Option<Arc<Store>>,
     /// A phone being paired, and the passphrase that will save it.
     pairing: Option<Box<phone::Pairing>>,
+    /// What checks a passphrase a request brings against the one the
+    /// store was decrypted with, without decrypting it again; none where
+    /// there is no store.
+    verifier: Option<Arc<Verifier>>,
+}
+
+/// Wrong passphrases in a row, and when the next one may be checked.
+struct Guesses {
+    wrong: u32,
+    next: Instant,
+}
+
+/// How many wrong passphrases in a row are checked with no wait: a person
+/// mistypes.
+const FREE_GUESSES: u32 = 3;
+
+/// How long the first one after them waits; each one more waits twice as
+/// long, up to [`LONGEST_GUESS_WAIT`]. Checking against the session's
+/// verifier is quick, so this is what keeps a local process from trying
+/// passphrases by the thousand, as decrypting the store for each check
+/// did before.
+const GUESS_WAIT: Duration = Duration::from_millis(250);
+const LONGEST_GUESS_WAIT: Duration = Duration::from_secs(5);
+
+/// How long the check after `wrong` wrong passphrases in a row waits.
+pub(super) fn guess_wait(wrong: u32) -> Duration {
+    match wrong.checked_sub(FREE_GUESSES) {
+        None => Duration::ZERO,
+        Some(more) => GUESS_WAIT
+            .saturating_mul(1u32.checked_shl(more).unwrap_or(u32::MAX))
+            .min(LONGEST_GUESS_WAIT),
+    }
 }
 
 enum Phase {
@@ -1065,6 +1098,9 @@ struct Inner {
     /// One `connect proton` at a time, from proving the human to swapping
     /// the session in; `pass-cli` calls themselves are serialized as well.
     proton_connect: tokio::sync::Mutex<()>,
+    /// Held while a passphrase is checked against the session's verifier,
+    /// the wait before it included: one check at a time.
+    guesses: tokio::sync::Mutex<Guesses>,
     state: Mutex<State>,
     audit: Option<AuditLog>,
     proofs: Option<Proofs>,
@@ -1123,6 +1159,10 @@ impl Daemon {
                 store,
                 store_io: tokio::sync::Mutex::new(()),
                 proton_connect: tokio::sync::Mutex::new(()),
+                guesses: tokio::sync::Mutex::new(Guesses {
+                    wrong: 0,
+                    next: Instant::now(),
+                }),
                 state: Mutex::new(State {
                     phase: Phase::Locked,
                     generation: 0,
@@ -2153,7 +2193,7 @@ impl Daemon {
         let file = self.inner.store.clone();
         let mut moved = Vec::new();
         let (envs, secrets) = file_flags(&registry);
-        let store = match (file.exists()?, passphrase) {
+        let (store, verifier) = match (file.exists()?, passphrase) {
             (false, _) if !envs.is_empty() || !secrets.is_empty() => {
                 return Err(ResolveError::Config(
                     "project files mark something sensitive, and marks are kept in the local \
@@ -2161,13 +2201,15 @@ impl Daemon {
                         .into(),
                 ));
             }
-            (false, _) => None,
+            (false, _) => (None, None),
             (true, None) => return Err(StoreError::PassphraseRequired.into()),
             (true, Some(p)) => {
                 let p = Arc::new(p);
-                let opened = {
+                // The passphrase opened the store: what checks the next
+                // one against it is made from it now.
+                let (opened, verifier) = {
                     let (file, p) = (file.clone(), p.clone());
-                    blocking(move || file.open(&p)).await?
+                    blocking(move || Ok((file.open(&p)?, file.verifier(&p)?))).await?
                 };
                 let opened = copy_flags(
                     opened,
@@ -2191,7 +2233,7 @@ impl Daemon {
                     opened
                 };
                 self.note_remote(&opened);
-                Some(Arc::new(opened))
+                (Some(Arc::new(opened)), Some(Arc::new(verifier)))
             }
         };
         if registry.config.strict_memory
@@ -2201,7 +2243,7 @@ impl Daemon {
         }
         let mut warnings = unmarked_warnings(&registry, store.as_deref());
         warnings.extend(moved);
-        self.start_session(idle, store, locks)?;
+        self.start_session(idle, store, verifier, locks)?;
         Ok(warnings)
     }
 
@@ -2274,6 +2316,7 @@ impl Daemon {
         &self,
         idle: Duration,
         store: Option<Arc<Store>>,
+        verifier: Option<Arc<Verifier>>,
         locks: u64,
     ) -> Result<(), ResolveError> {
         let id = {
@@ -2294,6 +2337,7 @@ impl Daemon {
                 superseded: Vec::new(),
                 store,
                 pairing: None,
+                verifier,
             });
             id
         };
@@ -2373,9 +2417,23 @@ impl Daemon {
         change: impl FnOnce(&mut Store) -> Result<T, StoreError> + Send + 'static,
     ) -> Result<T, ResolveError> {
         let _io = self.inner.store_io.lock().await;
+        let (passphrase, held) = self.held(passphrase).await?;
         let file = self.inner.store.clone();
-        let (change, store) =
-            blocking(move || file.update(&passphrase, new_passphrase.as_ref(), change)).await?;
+        let (change, store, verifier) = blocking(move || {
+            let (change, store) =
+                file.update_held(held, &passphrase, new_passphrase.as_ref(), change)?;
+            // Another passphrase from now on: the next is checked against it.
+            let verifier = (new_passphrase.as_ref())
+                .map(|p| file.verifier(p))
+                .transpose()?;
+            Ok((change, store, verifier))
+        })
+        .await?;
+        if let Some(verifier) = verifier
+            && let Phase::Unlocked(session) = &mut self.inner.state().phase
+        {
+            session.verifier = Some(Arc::new(verifier));
+        }
         // Before anything else can fail: the file says it now.
         self.note_remote(&store);
         let strict = self.registry().is_ok_and(|r| r.config.strict_memory);
@@ -2546,9 +2604,12 @@ impl Daemon {
         let vaults = staged.vaults;
         let token = ProtonToken { token, expires };
         let _io = self.inner.store_io.lock().await;
+        let (passphrase, held) = self.held(passphrase).await?;
         let file = self.inner.store.clone();
         let (change, store) = tokio::task::spawn_blocking(move || {
-            staged.swap_then(|| file.update(&passphrase, None, |st| Ok(st.set_proton_token(token))))
+            staged.swap_then(|| {
+                file.update_held(held, &passphrase, None, |st| Ok(st.set_proton_token(token)))
+            })
         })
         .await
         .map_err(|_| ResolveError::Internal("the pass-cli session swap panicked".into()))?
@@ -4251,6 +4312,10 @@ impl Daemon {
     /// which only a human knows. Without a store there is nothing to prove
     /// it with.
     /// Gives `passphrase` back, for a write that follows.
+    ///
+    /// While the daemon is unlocked the passphrase is checked against the
+    /// session's verifier, which takes a few hundredths of a second;
+    /// locked, by decrypting the store, which takes about a second.
     async fn prove_human(&self, passphrase: Passphrase) -> Result<Passphrase, ResolveError> {
         let file = self.inner.store.clone();
         if !file.exists()? {
@@ -4259,7 +4324,70 @@ impl Daemon {
             }
             .into());
         }
-        blocking(move || file.open(&passphrase).map(|_| passphrase)).await
+        match self.admits(passphrase).await? {
+            (passphrase, Some(true)) => Ok(passphrase),
+            (_, Some(false)) => Err(StoreError::WrongPassphrase.into()),
+            (passphrase, None) => {
+                blocking(move || file.open(&passphrase).map(|_| passphrase)).await
+            }
+        }
+    }
+
+    /// Whether `passphrase` is the one the store was decrypted with, as
+    /// the session's verifier says; `None` while locked, or unlocked with
+    /// no store, when only the file can say. One check at a time, and
+    /// after [`FREE_GUESSES`] wrong ones in a row each waits first: see
+    /// [`guess_wait`]. Gives `passphrase` back.
+    async fn admits(
+        &self,
+        passphrase: Passphrase,
+    ) -> Result<(Passphrase, Option<bool>), ResolveError> {
+        let verifier = match &self.inner.state().phase {
+            Phase::Unlocked(session) => session.verifier.clone(),
+            Phase::Locked => None,
+        };
+        let Some(verifier) = verifier else {
+            return Ok((passphrase, None));
+        };
+        let mut guesses = self.inner.guesses.lock().await;
+        tokio::time::sleep_until(guesses.next).await;
+        let checked = tokio::task::spawn_blocking(move || {
+            let right = verifier.admits(&passphrase);
+            (passphrase, right)
+        });
+        let (passphrase, right) = checked
+            .await
+            .map_err(|_| ResolveError::Internal("a passphrase check panicked".into()))?;
+        if right {
+            guesses.wrong = 0;
+        } else {
+            guesses.wrong = guesses.wrong.saturating_add(1);
+            guesses.next = Instant::now() + guess_wait(guesses.wrong);
+        }
+        Ok((passphrase, Some(right)))
+    }
+
+    /// What a write of the store starts from in place of decrypting the
+    /// file: a copy of the session's store, once [`Self::admits`] says
+    /// `passphrase` is its own. A wrong one is refused here. None while
+    /// locked, or with no store: the write then decrypts the file, which
+    /// checks the passphrase. Call it holding the store lock, so the copy
+    /// is of what the write replaces. Gives `passphrase` back.
+    async fn held(
+        &self,
+        passphrase: Passphrase,
+    ) -> Result<(Passphrase, Option<Held>), ResolveError> {
+        match self.admits(passphrase).await? {
+            (passphrase, None) => Ok((passphrase, None)),
+            (_, Some(false)) => Err(StoreError::WrongPassphrase.into()),
+            (passphrase, Some(true)) => {
+                let Some(Some(store)) = self.unlocked_store() else {
+                    return Ok((passphrase, None));
+                };
+                let copy = blocking(move || store.duplicate()).await?;
+                Ok((passphrase, Some(Held::with_checked_passphrase(copy))))
+            }
+        }
     }
 
     /// The values for the caller's environment, for handing to a process.

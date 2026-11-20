@@ -248,6 +248,99 @@ pub struct Store {
     grants: Vec<RemoteGrant>,
     /// The phone that may approve requests, if one is paired.
     phone: Option<PairedPhone>,
+    /// The file this was read from or written to, as it was then; none
+    /// for a store that is in no file yet. Copies keep it.
+    stamp: Option<Stamp>,
+}
+
+/// A store file as it was when it was read or written: what tells that
+/// file from one that replaced it. Every write makes a new file and moves
+/// it into place, so a file that is still this one holds what it held.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Stamp {
+    device: u64,
+    inode: u64,
+    len: u64,
+    modified: (i64, i64),
+}
+
+impl Stamp {
+    fn of(file: &fs::Metadata) -> Self {
+        use std::os::unix::fs::MetadataExt;
+        Self {
+            device: file.dev(),
+            inode: file.ino(),
+            len: file.len(),
+            modified: (file.mtime(), file.mtime_nsec()),
+        }
+    }
+}
+
+/// How much work checking a passphrase against a [`Verifier`] is: scrypt
+/// with N = 2^15, which takes about 32 MiB and a few hundredths of a
+/// second. Decrypting the store takes about a second by design, and far
+/// more memory: that guards the file, which may be copied. A verifier
+/// never leaves the daemon's memory, where the decrypted store is too.
+const VERIFIER_LOG_N: u8 = 15;
+
+/// What tells the store's passphrase from any other, without decrypting
+/// the store again: a salted scrypt hash of it, made once the store was
+/// decrypted with it. Kept in memory only, for as long as the daemon is
+/// unlocked. It checks that a person is there; it does not decrypt
+/// anything, so it is no key.
+pub struct Verifier {
+    salt: [u8; 16],
+    hash: Zeroizing<[u8; 32]>,
+    log_n: u8,
+}
+
+impl fmt::Debug for Verifier {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Verifier(<redacted>)")
+    }
+}
+
+impl Verifier {
+    fn hash(passphrase: &Passphrase, salt: &[u8], log_n: u8) -> Option<Zeroizing<[u8; 32]>> {
+        use age::secrecy::ExposeSecret;
+        let mut hash = Zeroizing::new([0u8; 32]);
+        let params = scrypt::Params::new(log_n, 8, 1, hash.len()).ok()?;
+        scrypt::scrypt(
+            passphrase.0.expose_secret().as_bytes(),
+            salt,
+            &params,
+            &mut *hash,
+        )
+        .ok()?;
+        Some(hash)
+    }
+
+    fn new(passphrase: &Passphrase, log_n: u8) -> Result<Self, String> {
+        let mut salt = [0u8; 16];
+        getrandom::fill(&mut salt).map_err(|e| format!("no random salt: {e}"))?;
+        let hash = Self::hash(passphrase, &salt, log_n).ok_or("its parameters are not scrypt's")?;
+        Ok(Self { salt, hash, log_n })
+    }
+
+    /// Whether `passphrase` is the one this was made from.
+    pub fn admits(&self, passphrase: &Passphrase) -> bool {
+        Self::hash(passphrase, &self.salt, self.log_n)
+            .is_some_and(|hash| bool::from(hash.ct_eq(&*self.hash)))
+    }
+}
+
+/// A copy of the store the daemon holds unlocked, for a write whose
+/// passphrase a [`Verifier`] admitted: [`StoreFile::update_held`] writes
+/// from it without decrypting the file again.
+pub struct Held(Store);
+
+impl Held {
+    /// `store` for a write with a passphrase that was checked. With one
+    /// that was not, the write would encrypt the store with it: a wrong
+    /// one would lock everyone out.
+    pub fn with_checked_passphrase(store: Store) -> Self {
+        Self(store)
+    }
 }
 
 /// The phone that may approve requests on the approval page: a machine on
@@ -731,7 +824,9 @@ impl Store {
 
     /// A copy, values included: what writing it and reading it back gives.
     pub fn duplicate(&self) -> Result<Self, StoreError> {
-        Self::parse(Path::new("the unlocked store"), &self.render())
+        let mut copy = Self::parse(Path::new("the unlocked store"), &self.render())?;
+        copy.stamp = self.stamp;
+        Ok(copy)
     }
 
     /// The marks added since `before`, a copy of this store made earlier:
@@ -812,6 +907,7 @@ impl Store {
             remote_enabled: raw.remote.as_ref().is_some_and(|r| r.enabled),
             grants: raw.remote.map(|r| r.grants).unwrap_or_default(),
             phone: raw.phone,
+            stamp: None,
         })
     }
 
@@ -1203,15 +1299,17 @@ impl StoreFile {
                 path: self.path.clone(),
             });
         }
-        let store = Store::default();
+        let mut store = Store::default();
         self.write(passphrase, &store)?;
+        store.stamp = self.stamp()?;
         Ok(store)
     }
 
     /// Decrypts and parses the store.
     pub fn open(&self, passphrase: &Passphrase) -> Result<Store, StoreError> {
-        let ciphertext = match fs::read(&self.path) {
-            Ok(c) => c,
+        use std::io::Read as _;
+        let mut file = match fs::File::open(&self.path) {
+            Ok(file) => file,
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
                 return Err(StoreError::Missing {
                     path: self.path.clone(),
@@ -1219,12 +1317,42 @@ impl StoreFile {
             }
             Err(e) => return Err(io_error(&self.path, &e)),
         };
+        // Of the file that is read, not of one that replaces it meanwhile.
+        let stamp = file
+            .metadata()
+            .map(|m| Stamp::of(&m))
+            .map_err(|e| io_error(&self.path, &e))?;
+        let mut ciphertext = Vec::new();
+        file.read_to_end(&mut ciphertext)
+            .map_err(|e| io_error(&self.path, &e))?;
         let plaintext = self.decrypt(passphrase, &ciphertext)?;
         let text = std::str::from_utf8(&plaintext).map_err(|_| StoreError::Corrupt {
             path: self.path.clone(),
             problem: "the contents are not UTF-8",
         })?;
-        Store::parse(&self.path, text)
+        let mut store = Store::parse(&self.path, text)?;
+        store.stamp = Some(stamp);
+        Ok(store)
+    }
+
+    /// What checks, while the daemon is unlocked, that a passphrase is the
+    /// one this store was just decrypted or written with.
+    pub fn verifier(&self, passphrase: &Passphrase) -> Result<Verifier, StoreError> {
+        Verifier::new(passphrase, self.work_factor.unwrap_or(VERIFIER_LOG_N)).map_err(|e| {
+            StoreError::Io {
+                path: self.path.clone(),
+                message: format!("cannot make what checks its passphrase: {e}"),
+            }
+        })
+    }
+
+    /// The file as it is now, if there is one.
+    fn stamp(&self) -> Result<Option<Stamp>, StoreError> {
+        match fs::symlink_metadata(&self.path) {
+            Ok(file) => Ok(Some(Stamp::of(&file))),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(io_error(&self.path, &e)),
+        }
     }
 
     /// Under the lock: decrypts with `passphrase` (which checks it), adds
@@ -1239,16 +1367,38 @@ impl StoreFile {
         new_passphrase: Option<&Passphrase>,
         change: impl FnOnce(&mut Store) -> Result<T, StoreError>,
     ) -> Result<(T, Store), StoreError> {
+        self.update_held(None, passphrase, new_passphrase, change)
+    }
+
+    /// As [`Self::update`], starting from `held` in place of decrypting
+    /// the file, where the file is still the one `held` was read from or
+    /// written to: decrypting is most of what a write takes. `held` comes
+    /// with a passphrase that was checked, since nothing here checks it
+    /// then. A file that is another one by now, replaced by something
+    /// else than this, is decrypted as ever, which checks the passphrase.
+    pub fn update_held<T>(
+        &self,
+        held: Option<Held>,
+        passphrase: &Passphrase,
+        new_passphrase: Option<&Passphrase>,
+        change: impl FnOnce(&mut Store) -> Result<T, StoreError>,
+    ) -> Result<(T, Store), StoreError> {
         if new_passphrase.is_some_and(Passphrase::is_empty) {
             return Err(StoreError::EmptyPassphrase);
         }
         let _lock = self.lock()?;
-        let mut store = self.open(passphrase)?;
+        let now = self.stamp()?;
+        let mut store = match held {
+            Some(Held(store)) if now.is_some() && store.stamp == now => store,
+            _ => self.open(passphrase)?,
+        };
         for mark in self.read_waiting() {
             store.add_mark(mark);
         }
         let result = change(&mut store)?;
         self.write(new_passphrase.unwrap_or(passphrase), &store)?;
+        // Still under the lock: of the file just written.
+        store.stamp = self.stamp()?;
         // The store has them now. If the file stays, the next write adds
         // them again, which changes nothing.
         let path = self.marks_path();
@@ -1729,6 +1879,92 @@ mod tests {
             value(&f.open(&pass("new")).unwrap(), "widget.dev", "A"),
             "v"
         );
+    }
+
+    /// A verifier tells the passphrase it was made from from any other,
+    /// each one made with a salt of its own, and shows nothing of it.
+    #[test]
+    fn a_verifier_admits_only_its_passphrase() {
+        let c = Canary::new();
+        let (_d, f) = setup();
+        let verifier = f.verifier(&pass(c.value())).unwrap();
+        assert!(verifier.admits(&pass(c.value())));
+        for wrong in ["", "pw", &format!("{} ", c.value()), &c.value()[1..]] {
+            assert!(!verifier.admits(&pass(wrong)), "{wrong:?}");
+        }
+        let again = f.verifier(&pass(c.value())).unwrap();
+        assert_ne!(verifier.salt, again.salt);
+        assert_ne!(*verifier.hash, *again.hash);
+        assert!(again.admits(&pass(c.value())));
+        assert_no_canary(&c, &format!("{verifier:?}"));
+        // The real cost is scrypt's, and more than a test's.
+        let real = StoreFile::new(f.path()).verifier(&pass("pw")).unwrap();
+        assert_eq!(real.log_n, VERIFIER_LOG_N);
+        assert!(real.admits(&pass("pw")) && !real.admits(&pass("pW")));
+    }
+
+    /// A write that starts from the store held in memory does not decrypt
+    /// the file, while the file is still the one that store was read from
+    /// or written to. One that something else replaced is decrypted, so
+    /// what it holds is kept and its passphrase checked.
+    #[test]
+    fn a_held_store_is_written_from_only_while_the_file_is_its_own() {
+        let (_d, f) = setup();
+        f.create(&pass("pw")).unwrap();
+        set(&f, "pw", "widget.dev", "A", "1");
+        let held = |st: &Store| Some(Held::with_checked_passphrase(st.duplicate().unwrap()));
+        let put = |k: &'static str| {
+            move |st: &mut Store| {
+                Ok(st.set(section("widget.dev"), key(k), SecretValue::new("2".into())))
+            }
+        };
+
+        // Read, then written from: no decrypting. It is told apart by a
+        // mark the copy holds and the file does not.
+        let mut opened = f.open(&pass("pw")).unwrap();
+        opened.add_mark(Mark::Env(section("widget.prod")));
+        let (_, written) = f
+            .update_held(held(&opened), &pass("pw"), None, put("B"))
+            .unwrap();
+        assert!(written.env_marked(&"widget".parse().unwrap(), &"prod".parse().unwrap()));
+        assert_eq!(value(&written, "widget.dev", "A"), "1");
+        // What was written is the file's own in turn.
+        let (_, written) = f
+            .update_held(held(&written), &pass("pw"), None, put("C"))
+            .unwrap();
+        let read = f.open(&pass("pw")).unwrap();
+        for k in ["A", "B", "C"] {
+            assert!(
+                read.section(&section("widget.dev"))
+                    .unwrap()
+                    .contains_key(&key(k))
+            );
+        }
+        assert!(read.env_marked(&"widget".parse().unwrap(), &"prod".parse().unwrap()));
+
+        // Something else wrote the file since: it is decrypted, so that
+        // write is kept, and a wrong passphrase is refused as ever.
+        set(&f, "pw", "widget.dev", "ELSEWHERE", "3");
+        let stale = || held(&written);
+        assert_eq!(
+            f.update_held(stale(), &pass("wrong"), None, put("D"))
+                .unwrap_err(),
+            StoreError::WrongPassphrase
+        );
+        let (_, now) = f.update_held(stale(), &pass("pw"), None, put("D")).unwrap();
+        assert_eq!(value(&now, "widget.dev", "ELSEWHERE"), "3");
+        assert_eq!(value(&now, "widget.dev", "D"), "2");
+
+        // A store that was never in a file, and a file that is gone.
+        let unread = Some(Held::with_checked_passphrase(Store::default()));
+        let (_, now) = f.update_held(unread, &pass("pw"), None, put("E")).unwrap();
+        assert_eq!(value(&now, "widget.dev", "ELSEWHERE"), "3");
+        fs::remove_file(f.path()).unwrap();
+        assert!(matches!(
+            f.update_held(held(&now), &pass("pw"), None, put("F"))
+                .unwrap_err(),
+            StoreError::Missing { .. }
+        ));
     }
 
     #[test]
