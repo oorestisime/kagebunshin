@@ -12,7 +12,8 @@ other processes, and the copies it cannot control.
   zeroed once copied. One value per page because `mlock` does not count:
   unlocking one of two values that shared a page would unlock both.
 - **Zeroed buffers.** IPC frames, values on the wire (`WireSecret`), the
-  decrypted store plaintext, the masker's patterns and passphrases are
+  decrypted store plaintext, the masker's patterns, passphrases and the
+  hash a passphrase is checked against while the daemon is unlocked are
   `Zeroizing`: ordinary heap memory, zeroed on drop.
 - **No dumps.** The daemon and the CLI set their soft `RLIMIT_CORE` to 0 at
   start, and on Linux `PR_SET_DUMPABLE` to 0. That also stops other

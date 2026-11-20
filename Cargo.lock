@@ -2916,7 +2916,7 @@ dependencies = [
 
 [[package]]
 name = "kagebunshin"
-version = "0.0.1-alpha.16"
+version = "0.0.1-alpha.17"
 dependencies = [
  "age",
  "aho-corasick",
@@ -2944,6 +2944,7 @@ dependencies = [
  "rpassword",
  "rustls",
  "rustls-native-certs",
+ "scrypt",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -2961,7 +2962,7 @@ dependencies = [
 
 [[package]]
 name = "kagebunshin-app"
-version = "0.0.1-alpha.16"
+version = "0.0.1-alpha.17"
 dependencies = [
  "kagebunshin",
  "qrcodegen",
@@ -2971,7 +2972,7 @@ dependencies = [
 
 [[package]]
 name = "kagebunshin-e2e"
-version = "0.0.1-alpha.16"
+version = "0.0.1-alpha.17"
 dependencies = [
  "aws-config",
  "aws-sdk-secretsmanager",

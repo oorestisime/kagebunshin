@@ -2650,6 +2650,100 @@ fn get(env: Option<&str>, k: &str, pass: &str) -> Request {
     }
 }
 
+/// While the daemon is unlocked a passphrase is checked against what the
+/// session keeps of the one that unlocked it, not by decrypting the store
+/// again: a store file that can no longer be decrypted changes nothing of
+/// that. A write still reads the file when it is not the one the session
+/// last read or wrote.
+#[tokio::test]
+async fn an_unlocked_daemon_checks_a_passphrase_without_decrypting_the_store() {
+    let (_tmp, file, d) = stored_daemon();
+    init(&file, &d).await;
+    d.handle(store_set("A", "v", "pw")).await;
+
+    // Something else wrote the store: the next write keeps what it wrote.
+    let pass = Passphrase::new("pw".into());
+    file.update(&pass, None, |st| {
+        Ok(st.set(
+            "widget.dev".parse().unwrap(),
+            key("ELSEWHERE"),
+            SecretValue::new("v".into()),
+        ))
+    })
+    .unwrap();
+    let r = d.handle(store_set("B", "v", "pw")).await;
+    assert!(matches!(r, Response::Store { .. }), "{r:?}");
+    let keys = |st: &Store| -> Vec<String> {
+        let dev = st.section(&"widget.dev".parse().unwrap()).unwrap();
+        dev.keys().map(ToString::to_string).collect()
+    };
+    assert_eq!(keys(&file.open(&pass).unwrap()), ["A", "B", "ELSEWHERE"]);
+
+    // Not a store any more: the passphrase is told from a wrong one all
+    // the same, and a value handed out.
+    std::fs::write(file.path(), "not an age file").unwrap();
+    assert_eq!(
+        error_code(d.handle(get(None, "A", "wrong")).await),
+        ErrorCode::WrongPassphrase
+    );
+    let r = d.handle(get(None, "A", "pw")).await;
+    assert!(matches!(r, Response::Value { .. }), "{r:?}");
+    // A write decrypts it, the file being another one now, and fails.
+    assert_eq!(
+        error_code(d.handle(store_set("C", "v", "pw")).await),
+        ErrorCode::Store
+    );
+    // Locked, only the file can say.
+    d.lock();
+    let locked = d.unlock(Some(Passphrase::new("pw".into()))).await;
+    assert!(locked.is_err());
+}
+
+/// Wrong passphrases in a row are checked at once a few times, as a
+/// person mistypes, and then each waits longer than the one before, up to
+/// a few seconds; the right one is not kept waiting again after it.
+#[tokio::test(start_paused = true)]
+async fn wrong_passphrases_in_a_row_wait_longer_each_time() {
+    use super::broker::guess_wait;
+    let waits: Vec<u64> = [0, 1, 2, 3, 4, 5, 6, 7, 8, 40, u32::MAX]
+        .into_iter()
+        .map(|wrong| u64::try_from(guess_wait(wrong).as_millis()).unwrap())
+        .collect();
+    assert_eq!(
+        waits,
+        [0, 0, 0, 250, 500, 1000, 2000, 4000, 5000, 5000, 5000]
+    );
+
+    let (_tmp, file, d) = stored_daemon();
+    init(&file, &d).await;
+    d.handle(store_set("A", "v", "pw")).await;
+    let took = |req: Request| async {
+        let before = tokio::time::Instant::now();
+        let r = d.handle(req).await;
+        (before.elapsed(), r)
+    };
+    let wrong = || get(None, "A", "wrong");
+    // Three with no wait; the fourth waits a quarter of a second, the
+    // fifth half of one.
+    for _ in 0..3 {
+        let (waited, r) = took(wrong()).await;
+        assert_eq!(error_code(r), ErrorCode::WrongPassphrase);
+        assert!(waited < Duration::from_millis(200), "{waited:?}");
+    }
+    for at_least in [250, 500] {
+        let (waited, r) = took(wrong()).await;
+        assert_eq!(error_code(r), ErrorCode::WrongPassphrase);
+        assert!(waited >= Duration::from_millis(at_least), "{waited:?}");
+    }
+    // The right one waits its turn, a second, once: then none does.
+    let (waited, r) = took(get(None, "A", "pw")).await;
+    assert!(matches!(r, Response::Value { .. }), "{r:?}");
+    assert!(waited >= Duration::from_secs(1), "{waited:?}");
+    let (waited, r) = took(wrong()).await;
+    assert_eq!(error_code(r), ErrorCode::WrongPassphrase);
+    assert!(waited < Duration::from_millis(200), "{waited:?}");
+}
+
 #[tokio::test]
 async fn get_needs_the_store_passphrase() {
     let c = Canary::new();
@@ -2840,6 +2934,21 @@ async fn every_store_write_checks_the_passphrase() {
             locked: false
         }
     );
+    // From then on the new one is the passphrase, with no lock between.
+    assert_eq!(
+        error_code(d.handle(store_set("B", "v", "pw")).await),
+        ErrorCode::WrongPassphrase
+    );
+    let r = d.handle(store_set("B", "v", "new")).await;
+    assert!(matches!(r, Response::Store { .. }), "{r:?}");
+    let r = d
+        .handle(Request::StoreUnset {
+            section: "widget.dev".parse().unwrap(),
+            key: key("B"),
+            passphrase: pw("new"),
+        })
+        .await;
+    assert!(matches!(r, Response::Store { .. }), "{r:?}");
     d.lock();
     let old = d.unlock(Some(Passphrase::new("pw".into()))).await;
     assert_eq!(
