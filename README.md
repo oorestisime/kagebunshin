@@ -221,7 +221,9 @@ they need and keeps the values with the original.
 ## Status
 
 > [!NOTE]
-> **Alpha**; the latest build is v0.0.1-alpha.19.
+> **Early**; the latest release is v0.1.0. Until 1.0, a new minor version
+> (0.2, 0.3) may change a file format or a command; its release notes say
+> what.
 
 There are binaries for Linux x86_64 and aarch64 (glibc 2.35 or later)
 and for macOS arm64. The macOS

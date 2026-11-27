@@ -2,9 +2,9 @@
 
 What is agreed and not built yet. Each entry says what and why.
 
-## Before v1
+## Next
 
-What is left of v1 is release work:
+Release work still open:
 
 - Test with a real agent locally, checking the three promises against
   the audit log.
@@ -24,14 +24,12 @@ What is left of v1 is release work:
 - Signed and notarized macOS builds; a Homebrew tap from
   `packaging/homebrew/kagebunshin.rb`; `cargo install` from crates.io,
   which `publish = false` blocks today.
-- Choose the version number for v1 (today `0.0.1-alpha.19`), bump it and
-  tag; the release workflow refuses a tag that does not match it.
 
-## After v1
+## Later
 
 ### Vercel
 
-A `vercel` provider was written and taken out before v1: it had only run
+A `vercel` provider was written and taken out before the first release: it had only run
 against hand-written answers, never a real team, and Vercel does not
 return the value of a variable marked sensitive there, which limits what
 a provider can hand over. Bring it back once someone needs it, tested
