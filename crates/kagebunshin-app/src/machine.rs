@@ -32,8 +32,8 @@
 
 use kagebunshin::cli::edit::NewSource;
 use kagebunshin::ipc::protocol::{
-    Facts, PhoneChoice, PhoneStatus, RemoteStatus, SharedSecret, TokenExpiry, WaitingEnv,
-    WireSecret,
+    Facts, PhoneChoice, PhoneStatus, RemoteStatus, SharedSecret, StandingView, TokenExpiry,
+    WaitingEnv, WireSecret,
 };
 use kagebunshin::source::ProviderStatus;
 use kagebunshin::store::Section;
@@ -466,6 +466,8 @@ pub struct Machine {
     /// The approval page and the phone paired with it, as the last probe
     /// saw; none when no phone is paired or being paired, or while locked.
     pub phone: Option<Box<PhoneStatus>>,
+    /// The approvals that stand, as the last probe saw.
+    pub standing: Vec<StandingView>,
     pub phones: Phones,
     /// The pairing this window started, while it shows the way in.
     pub pairing: Option<Pairing>,
@@ -494,6 +496,7 @@ impl Default for Machine {
             remote: None,
             token: None,
             phone: None,
+            standing: Vec::new(),
             phones: Phones::default(),
             pairing: None,
             revealing: None,
@@ -530,6 +533,11 @@ pub enum Event {
     /// Put away the token a grant was just given, and end the pairing
     /// under way.
     Forget,
+    /// End the approvals that stand for one environment.
+    EndStanding {
+        project: ProjectName,
+        env: EnvName,
+    },
     /// Ask how the providers are, and again whenever the columns are.
     CheckProviders,
     /// Ask which phones could be paired, and again whenever the columns
@@ -900,6 +908,14 @@ fn react(m: &mut Machine, event: Event) -> Effects<Effect> {
                 effects.push(Effect::Run(attempt, Job::StopPairing));
             }
         }
+        Event::EndStanding { project, env } => {
+            // Gone from the list at once; the probe says what is left.
+            m.standing
+                .retain(|s| !(s.project == project && s.env == env));
+            let attempt = m.seq.next();
+            effects.push(Effect::Run(attempt, Job::EndStanding { project, env }));
+            m.probe(&mut effects);
+        }
         Event::CheckProviders => {
             if m.providers.asking.is_none() {
                 m.check_providers(&mut effects);
@@ -982,6 +998,7 @@ fn react(m: &mut Machine, event: Event) -> Effects<Effect> {
                     m.acknowledged = probed.acknowledged;
                     m.shared = probed.shared;
                     m.remote = probed.remote;
+                    m.standing = probed.standing;
                     m.heard(probed.phone);
                     if m.pairing.is_some() {
                         now + PAIRING_PROBE_EVERY
@@ -996,6 +1013,7 @@ fn react(m: &mut Machine, event: Event) -> Effects<Effect> {
                     m.acknowledged.clear();
                     m.shared.clear();
                     m.remote = None;
+                    m.standing.clear();
                     m.phone = None;
                     m.pairing = None;
                     now + RETRY_AFTER
@@ -1166,6 +1184,7 @@ fn react(m: &mut Machine, event: Event) -> Effects<Effect> {
                     Vec::new(),
                 ),
                 Ok(Done::PairingStopped) => ("Stopped pairing.".to_owned(), Vec::new()),
+                Ok(Done::StandingEnded) => ("Ended the approval.".to_owned(), Vec::new()),
                 Ok(Done::PhoneUnpaired(name)) => (
                     format!("Removed {name}: requests are approved at this computer only."),
                     Vec::new(),
@@ -1514,6 +1533,7 @@ mod tests {
                     shared: Vec::new(),
                     remote: None,
                     phone: None,
+                    standing: Vec::new(),
                 })),
                 now: 0.0,
             },

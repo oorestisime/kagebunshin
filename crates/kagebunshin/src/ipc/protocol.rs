@@ -324,6 +324,20 @@ pub enum Request {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         values: Vec<(KeyName, WireSecret)>,
     },
+    /// The app: approves request `id` as [`Request::Approve`] does, and
+    /// lets the approval stand: for [`StandingOffer::seconds`] the one the
+    /// prompt offers it for gets that environment again without being
+    /// asked. Refused for a request whose prompt offers none.
+    ApproveStanding {
+        id: u64,
+        passphrase: WireSecret,
+    },
+    /// Ends every approval that stands for `env` of `project`. It only
+    /// tightens, so it takes no passphrase. Local callers only.
+    EndStanding {
+        project: ProjectName,
+        env: EnvName,
+    },
     /// Turns the remote endpoint on or off, after decrypting the store with
     /// `passphrase`. Local callers only.
     RemoteEnable {
@@ -500,6 +514,31 @@ pub struct ApprovalPrompt {
     /// not hold. Where it names them, no other key is handed out.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub every_key: bool,
+    /// Set where the approval can be left standing: for whom, and how
+    /// long. None for a request that writes the store, and for a caller
+    /// no coding agent or machine is known to stand behind.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub standing: Option<StandingOffer>,
+}
+
+/// An approval that can be left standing: see [`Request::ApproveStanding`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StandingOffer {
+    /// How long it would stand.
+    pub seconds: u64,
+    /// Who it would stand for, as a prompt names them: a coding agent, or
+    /// `machine NAME`.
+    pub holder: String,
+}
+
+/// An approval that stands: its holder gets `env` of `project` without
+/// being asked for `left` more seconds. Names only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StandingView {
+    pub project: ProjectName,
+    pub env: EnvName,
+    pub holder: String,
+    pub left: u64,
 }
 
 /// Why a request waits for approval.
@@ -634,6 +673,10 @@ pub struct ResponseFrame {
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a reply is made once, sent and dropped: boxing the status would save nothing"
+)]
 pub enum Response {
     Hello {
         build: String,
@@ -681,6 +724,10 @@ pub enum Response {
     },
     /// The reply to `phone_pair_stop`.
     PhonePairStopped,
+    /// How many approvals [`Request::EndStanding`] ended.
+    StandingEnded {
+        ended: usize,
+    },
     /// The reply to `store_ask`: the keys of `section` a person typed a
     /// value for, in the order asked, those of them that had one before,
     /// and the keys asked for that they left empty, which are as they were.
@@ -821,6 +868,10 @@ pub struct StatusReport {
     /// approval can be asked there; for local callers.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub app: bool,
+    /// The approvals that stand, for local callers while the daemon is
+    /// unlocked.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub standing: Vec<StandingView>,
 }
 
 /// A secret an environment reads that other environments read too, as far
@@ -1450,6 +1501,7 @@ mod tests {
             shared: Vec::new(),
             app: false,
             phone: None,
+            standing: Vec::new(),
         });
         let day = 86_400;
         let soon = TokenExpiry {

@@ -41,7 +41,7 @@ use crate::daemon::resolve::ResolveError;
 use crate::ipc::prompt::Words;
 use crate::ipc::protocol::{
     ApprovalPrompt, ApprovalReason, Caller, PHONE_PAIRING, PhoneAnswer, PhoneChoice,
-    PhonePairingView, PhoneStatus, PhoneView, RemotePeer, Response,
+    PhonePairingView, PhoneStatus, PhoneView, RemotePeer, Response, StandingView,
 };
 use crate::source::unix_now;
 use crate::store::{PairedPhone, Passphrase};
@@ -99,6 +99,9 @@ pub(super) struct Phone {
 
 struct Challenge {
     id: u64,
+    /// The approval it is for is to be left standing: decided when the
+    /// challenge is made, so what the passkey signs is what was asked.
+    standing: bool,
     bytes: [u8; CHALLENGE_LEN],
     until: Instant,
 }
@@ -156,6 +159,8 @@ pub struct PhonePage {
     /// The requests answered since the daemon started, newest first; for
     /// the paired phone only.
     pub recent: Vec<Answered>,
+    /// The approvals that stand; for the paired phone only.
+    pub standing: Vec<StandingView>,
 }
 
 /// A waiting request as the page shows it.
@@ -200,6 +205,8 @@ pub enum PhoneError {
     DeskOnly,
     #[error("that took too long; try again")]
     NoChallenge,
+    #[error("that request is approved for itself only")]
+    NoStanding,
     #[error("not accepted: {0}")]
     Passkey(#[from] WebauthnError),
     #[error("{0}")]
@@ -479,8 +486,8 @@ impl Daemon {
         let (outcome, by) = match reply {
             Some(Reply::Desk(Some(_))) => (Outcome::Approved, Some(Place::Desk)),
             Some(Reply::Desk(None)) => (Outcome::Denied, Some(Place::Desk)),
-            Some(Reply::Phone(true)) => (Outcome::Approved, Some(Place::Phone)),
-            Some(Reply::Phone(false)) => (Outcome::Denied, Some(Place::Phone)),
+            Some(Reply::Phone { approved: true, .. }) => (Outcome::Approved, Some(Place::Phone)),
+            Some(Reply::Phone { .. }) => (Outcome::Denied, Some(Place::Phone)),
             None if timed_out => (Outcome::TimedOut, None),
             None => (Outcome::Ended, None),
         };
@@ -575,6 +582,7 @@ impl Daemon {
             version,
             paired,
             notified,
+            standing: if paired { self.standing() } else { Vec::new() },
             pairing,
             prompts,
             recent,
@@ -820,18 +828,28 @@ impl Daemon {
     }
 
     /// The paired phone, whose node is `node`, starts approving request
-    /// `id`: a challenge for that request alone.
-    pub fn phone_approve_begin(&self, node: &str, id: u64) -> Result<ApproveBegin, PhoneError> {
+    /// `id`: a challenge for that request alone, and for leaving the
+    /// approval `standing` or not.
+    pub fn phone_approve_begin(
+        &self,
+        node: &str,
+        id: u64,
+        standing: bool,
+    ) -> Result<ApproveBegin, PhoneError> {
         let phone = self.paired_as(node)?;
-        let here = (self.inner.approvals().prompt(id))
-            .map(|p| on_phone(&p.reason))
+        let (here, offered) = (self.inner.approvals().prompt(id))
+            .map(|p| (on_phone(&p.reason), p.standing.is_some()))
             .ok_or(PhoneError::Gone)?;
         if !here {
             return Err(PhoneError::DeskOnly);
         }
+        if standing && !offered {
+            return Err(PhoneError::NoStanding);
+        }
         let bytes = challenge()?;
         self.inner.phone().challenge = Some(Challenge {
             id,
+            standing,
             bytes,
             until: Instant::now() + CHALLENGE_LIFE,
         });
@@ -884,17 +902,26 @@ impl Daemon {
             );
             return Err(e.into());
         }
-        self.phone_answer(peer, id, true)
+        self.phone_answer(peer, id, Some(challenge.standing))
     }
 
     /// The paired phone `peer` denies request `id`. As in the app, a
     /// denial takes no proof.
     pub fn phone_deny(&self, peer: &RemotePeer, id: u64) -> Result<(), PhoneError> {
         self.paired_as(&peer.node)?;
-        self.phone_answer(peer, id, false)
+        self.phone_answer(peer, id, None)
     }
 
-    fn phone_answer(&self, peer: &RemotePeer, id: u64, approved: bool) -> Result<(), PhoneError> {
+    /// The paired phone's answer to request `id`: `approved` is whether
+    /// the approval is left standing, or none for a denial.
+    fn phone_answer(
+        &self,
+        peer: &RemotePeer,
+        id: u64,
+        approved: Option<bool>,
+    ) -> Result<(), PhoneError> {
+        let standing = approved == Some(true);
+        let approved = approved.is_some();
         let prompt = (self.inner.approvals().prompt(id).cloned()).ok_or(PhoneError::Gone)?;
         if approved && !on_phone(&prompt.reason) {
             return Err(PhoneError::DeskOnly);
@@ -910,6 +937,10 @@ impl Daemon {
             let mut event = Event::new(action, Decision::Allowed, &Caller::remote(peer.named()));
             (event.project, event.env) = (Some(prompt.project.clone()), Some(prompt.env.clone()));
             event.keys = prompt.keys.iter().map(ToString::to_string).collect();
+            if standing {
+                event.target = (prompt.standing.as_ref())
+                    .map(|s| format!("for {}, {} minutes", s.holder, s.seconds / 60));
+            }
             if let Err(e) = log.append(&event) {
                 warn!(error = %e, path = %log.path().display(), "cannot write the audit log");
                 if approved {
@@ -927,9 +958,22 @@ impl Daemon {
         };
         // Fails only if the request stopped waiting just now; it is then
         // refused anyway.
-        let _ = reply.send(Reply::Phone(approved));
+        let _ = reply.send(Reply::Phone { approved, standing });
         self.inner.approvals_changed.send_modify(|n| *n += 1);
         info!(id, approved, phone = %peer.machine, "answered an approval on the phone");
+        Ok(())
+    }
+
+    /// The paired phone `peer` ends the approvals that stand for `env` of
+    /// `project`. As a denial, it takes no proof.
+    pub fn phone_end_standing(
+        &self,
+        peer: &RemotePeer,
+        project: &ProjectName,
+        env: &EnvName,
+    ) -> Result<(), PhoneError> {
+        self.paired_as(&peer.node)?;
+        self.end_standing(project, env, &Caller::remote(peer.named()));
         Ok(())
     }
 

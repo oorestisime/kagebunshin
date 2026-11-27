@@ -128,7 +128,7 @@ async fn paired(d: &Daemon) -> FakePasskey {
 
 /// What the phone sends to approve request `id`.
 fn approval(d: &Daemon, passkey: &FakePasskey, id: u64) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
-    let begin = d.phone_approve_begin("nPHONE", id).unwrap();
+    let begin = d.phone_approve_begin("nPHONE", id, false).unwrap();
     assert_eq!(
         begin.credential,
         crate::webauthn::encode(&passkey.credential)
@@ -367,7 +367,7 @@ async fn the_paired_phone_approves_with_its_passkey() {
     // Only the paired phone is shown it, or may answer it.
     assert_eq!(d.phone_page("nTABLET").prompts, []);
     assert_eq!(
-        d.phone_approve_begin("nTABLET", id),
+        d.phone_approve_begin("nTABLET", id, false),
         Err(PhoneError::NotPaired)
     );
     assert_eq!(
@@ -375,7 +375,7 @@ async fn the_paired_phone_approves_with_its_passkey() {
         Err(PhoneError::NotPaired)
     );
     assert_eq!(
-        d.phone_approve_begin("nPHONE", id + 1),
+        d.phone_approve_begin("nPHONE", id + 1, false),
         Err(PhoneError::Gone)
     );
 
@@ -392,7 +392,7 @@ async fn the_paired_phone_approves_with_its_passkey() {
         Err(PhoneError::NoChallenge)
     );
     // So does an approval the phone was not verified for.
-    let begin = d.phone_approve_begin("nPHONE", id).unwrap();
+    let begin = d.phone_approve_begin("nPHONE", id, false).unwrap();
     let client = FakePasskey::client_data("webauthn.get", &site().origin, &begin.challenge);
     let auth = FakePasskey::auth_data(&site().name, 0x01);
     let signature = passkey.sign(&auth, &client);
@@ -509,7 +509,10 @@ async fn the_phone_denies_and_the_first_answer_wins() {
     let (asked, pending) = asked_in_the_app(&d, get(Some("dev"), "S", "pw")).await;
     let id = pending[0].id;
     d.lock();
-    assert_eq!(d.phone_approve_begin("nPHONE", id), Err(PhoneError::Locked));
+    assert_eq!(
+        d.phone_approve_begin("nPHONE", id, false),
+        Err(PhoneError::Locked)
+    );
     assert_eq!(d.phone_deny(&phone(), id), Err(PhoneError::Locked));
     let page = d.phone_page("nPHONE");
     assert!(
@@ -531,7 +534,7 @@ async fn the_phone_does_not_approve_what_takes_the_passphrase() {
     let page = d.phone_page("nPHONE");
     assert!(!page.prompts[0].here, "{page:?}");
     assert_eq!(
-        d.phone_approve_begin("nPHONE", id),
+        d.phone_approve_begin("nPHONE", id, false),
         Err(PhoneError::DeskOnly)
     );
     d.phone_deny(&phone(), id).unwrap();
@@ -760,4 +763,89 @@ async fn notifications_end_with_the_pairing() {
     d.lock();
     assert_eq!(d.phone_push_key("nPHONE"), Err(PhoneError::Locked));
     assert_eq!(service.sent().len(), 0);
+}
+
+/// The phone leaves an approval standing only where the prompt offers
+/// that, and the choice is made with the challenge, before the passkey
+/// signs.
+#[tokio::test]
+async fn the_phone_leaves_standing_only_what_offers_it() {
+    let (_tmp, _log, _file, d) = phone_daemon().await;
+    paired(&d).await;
+    // Asked by a process no agent stands behind.
+    let nobody = crate::test_support::Orphan::start();
+    let (asked, pending) = asked_from(&d, get(Some("dev"), "S", "pw"), &nobody.caller()).await;
+    let id = pending[0].id;
+    assert_eq!(pending[0].standing, None);
+    assert_eq!(
+        d.phone_approve_begin("nPHONE", id, true),
+        Err(PhoneError::NoStanding)
+    );
+    assert_eq!(d.phone_page("nPHONE").standing, []);
+    d.phone_deny(&phone(), id).unwrap();
+    asked.await.unwrap();
+}
+
+/// Approved on the phone for a while, an agent gets the environment again
+/// with nobody asked; the page lists what stands, to the paired phone
+/// only, and ends it with no proof, as it denies.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn the_phone_leaves_an_approval_standing_and_ends_it() {
+    use super::standing::FakeAgent;
+    let (_tmp, log, _file, d) = phone_daemon().await;
+    let passkey = paired(&d).await;
+    let agent = FakeAgent::start();
+    let command = agent.caller();
+    let run = || Request::RunEnv {
+        facts: facts(Some("dev"), Some(&["S"])),
+        program: Some("deploy".into()),
+        command: vec!["deploy".into()],
+    };
+
+    let (asked, pending) = asked_from(&d, run(), &command).await;
+    let id = pending[0].id;
+    let begin = d.phone_approve_begin("nPHONE", id, true).unwrap();
+    let (client, auth, signature) = passkey.get(&site(), &begin.challenge);
+    d.phone_approve(&site(), &phone(), id, &client, &auth, &signature)
+        .unwrap();
+    let r = asked.await.unwrap();
+    assert!(matches!(r, Response::RunEnv(_)), "{r:?}");
+
+    let page = d.phone_page("nPHONE");
+    let [stands] = &page.standing[..] else {
+        panic!("{page:?}")
+    };
+    assert_eq!(
+        (
+            stands.project.as_str(),
+            stands.env.as_str(),
+            &*stands.holder
+        ),
+        ("widget", "dev", "Claude Code")
+    );
+    assert_eq!(d.phone_page("nTABLET").standing, []);
+    let r = d.handle_from(run(), &command).await;
+    assert!(matches!(r, Response::RunEnv(_)), "{r:?}");
+    let lines = logged(&log);
+    for line in [
+        "phone approve allowed",
+        "approval stands allowed",
+        "use approval allowed",
+    ] {
+        assert!(lines.iter().any(|l| l == line), "{line}: {lines:?}");
+    }
+
+    let (project, env) = ("widget".parse().unwrap(), "dev".parse().unwrap());
+    assert_eq!(
+        d.phone_end_standing(&peer("nTABLET", "tablet"), &project, &env),
+        Err(PhoneError::NotPaired)
+    );
+    assert_eq!(d.phone_page("nPHONE").standing.len(), 1);
+    d.phone_end_standing(&phone(), &project, &env).unwrap();
+    assert_eq!(d.phone_page("nPHONE").standing, []);
+    // Ended: the next one is asked about again.
+    let (asked, pending) = asked_from(&d, run(), &command).await;
+    d.phone_deny(&phone(), pending[0].id).unwrap();
+    assert_eq!(error_code(asked.await.unwrap()), ErrorCode::NotApproved);
 }

@@ -206,11 +206,40 @@ function idle() {
   const rows = state.recent.map((r) => `<div class="row"><span class="dot ${r.outcome === 'approved' ? '' : r.outcome === 'denied' ? 'no' : 'none'}"></span>
     <div class="grow"><div class="t">${esc(r.project)}/${esc(r.env)}</div><div class="s mono">${esc(r.command)}</div></div>
     <div class="s right">${esc((outcomes[r.outcome] || r.outcome).toLowerCase())}<br>${ago(Math.max(state.now - r.time, 0))}${r.by ? ` · ${r.by === 'phone' ? 'phone' : 'desk'}` : ''}</div></div>`).join('');
-  show('idle', `<div class="scroll column">${notices()}
+  // What stands: who gets which environment without being asked, until
+  // when by this phone's clock, and the button that ends it.
+  const until = (left) => new Date(Date.now() + left * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const standing = state.standing.map((s, i) => `<div class="card notice"><div class="row">
+    <div class="grow"><div class="t">${esc(s.holder)} · ${esc(s.project)}/${esc(s.env)}</div>
+      <div class="s">Gets it without asking until ${esc(until(s.left))}.</div></div>
+    <button class="small" data-end="${i}">End</button></div></div>`).join('');
+  show('idle', `<div class="scroll column">${standing}${notices()}
     <div class="center top"><div class="ring">${icon.calm}</div>
       <h1>Nothing is waiting</h1>
       <p class="dim">A command that asks for sensitive values on <span class="strong">${esc(state.machine)}</span> shows up here.</p></div>
     ${rows ? `<div class="label">Recent</div><div class="card flush">${rows}</div>` : ''}</div>`);
+  // One that runs out is taken off the list: the daemon says what is left.
+  const first = Math.min(...state.standing.map((s) => s.left));
+  if (Number.isFinite(first)) {
+    timer = setTimeout(async () => {
+      try { state = await post('/state'); } catch { return; }
+      if (shown === 'idle') { shown = ''; route(); }
+    }, (first + 1) * 1000);
+  }
+  for (const button of document.querySelectorAll('[data-end]')) {
+    button.onclick = async () => {
+      const s = state.standing[Number(button.dataset.end)];
+      button.disabled = true;
+      busy = true;
+      try {
+        await post('/standing/end', { project: s.project, env: s.env });
+        state = await post('/state');
+      } catch { /* still listed: it can be tried again */ }
+      busy = false;
+      shown = '';
+      route();
+    };
+  }
   const on = $('notify');
   if (!on) return;
   on.onclick = async () => {
@@ -239,6 +268,8 @@ function request(p, more) {
   const w = p.words;
   const keys = p.keys.map((k) => `<span class="chip">${esc(k)}</span>`).join('');
   const line = p.here ? w.summary : 'This one takes the passphrase: answer it in the app on your computer. You can deny it here.';
+  // Where the approval can be left standing: "for 15 min".
+  const lasting = p.here && w.standing_label ? w.standing_label.charAt(0).toLowerCase() + w.standing_label.slice(1) : '';
   show(`request:${p.id}`, `<div class="scroll">
     <div class="who"><b>${esc(w.who)}</b><span class="place">${esc(w.place)}</span><span class="left" id="left"></span></div>
     <h1>${esc(w.question)}</h1>
@@ -250,10 +281,12 @@ function request(p, more) {
       <div class="label">${esc(w.asked_label)}</div><div class="chain">${esc(w.detail)}</div>
       ${w.why ? `<div class="label">Why it asks</div><div>${esc(w.why)}</div>` : ''}
       <div class="label">Approving</div><div>${esc(w.trust)}</div>
+      ${lasting ? `<p>${esc(w.standing)}</p>` : ''}
     </div>
   </div>
   <div class="err" id="err"></div>
-  <div class="bar"><button class="deny" id="deny">Deny</button>${p.here ? `<button class="approve" id="approve">${icon.face} Approve</button>` : ''}</div>`);
+  <div class="bar"><button class="deny" id="deny">Deny</button>${p.here ? `<button class="approve" id="approve">${icon.face} Approve</button>` : ''}
+    ${lasting ? `<button class="plain wide" id="standing">Approve ${esc(lasting)}</button>` : ''}</div>`);
   $('more').onclick = () => {
     const open = $('details').hidden;
     $('details').hidden = !open;
@@ -286,9 +319,11 @@ function request(p, more) {
       button.disabled = false;
     }
   };
-  if (p.here) {
-    $('approve').onclick = () => answer($('approve'), async () => {
-      const begin = await post('/approve/begin', { id: p.id });
+  // Whether the approval is left standing is said before the passkey
+  // signs: the challenge is for that answer and no other.
+  const approve = (button, standing) => {
+    button.onclick = () => answer(button, async () => {
+      const begin = await post('/approve/begin', { id: p.id, standing });
       const signed = await navigator.credentials.get({ publicKey: {
         challenge: bytes(begin.challenge),
         rpId: location.hostname,
@@ -303,7 +338,9 @@ function request(p, more) {
         signature: b64(signed.response.signature),
       });
     }, 'approved');
-  }
+  };
+  if (p.here) approve($('approve'), false);
+  if (lasting) approve($('standing'), true);
   $('deny').onclick = () => answer($('deny'), () => post('/deny', { id: p.id }), 'denied');
 }
 
@@ -360,7 +397,8 @@ function route() {
     if (r) return result(r);
   }
   idle.listed = idle.listed || '';
-  const listed = JSON.stringify([state.notified, pushes && Notification.permission, state.recent.map((r) => [r.id, r.outcome])]);
+  const listed = JSON.stringify([state.notified, pushes && Notification.permission, state.recent.map((r) => [r.id, r.outcome]),
+    state.standing.map((s) => [s.holder, s.project, s.env])]);
   if (shown !== 'idle' || idle.listed !== listed) { idle.listed = listed; idle(); }
 }
 

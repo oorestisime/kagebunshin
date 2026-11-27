@@ -15,9 +15,12 @@ const SHELLS: [&str; 6] = ["sh", "bash", "zsh", "dash", "ksh", "fish"];
 
 /// The coding agents a prompt names when one is among the processes a
 /// caller descends from: the process's name, and what to call it.
-const AGENTS: [(&str, &str); 9] = [
+const AGENTS: [(&str, &str); 10] = [
     ("claude", "Claude Code"),
     ("opencode", "OpenCode"),
+    // What OpenCode's desktop app runs commands under: one process for
+    // all its sessions, and not a child of any of them.
+    ("opencode-pty", "OpenCode"),
     ("codex", "Codex"),
     ("cursor-agent", "Cursor"),
     ("gemini", "Gemini CLI"),
@@ -42,6 +45,15 @@ pub fn import_files(sections: &[ImportNames]) -> String {
         1 => "1 env file".to_owned(),
         n => format!("{n} env files"),
     }
+}
+
+/// What to call the coding agent whose process is named `process`, if it
+/// is one a prompt knows.
+pub fn agent_named(process: &str) -> Option<&'static str> {
+    AGENTS
+        .iter()
+        .find(|(name, _)| *name == process)
+        .map(|(_, agent)| *agent)
 }
 
 /// The script of a command that hands one to a shell (`sh -c SCRIPT`,
@@ -119,6 +131,10 @@ pub struct Words {
     pub why: String,
     /// What approving does.
     pub trust: &'static str,
+    /// What the button that leaves the approval standing says, and what
+    /// that does; both empty where the prompt offers none.
+    pub standing_label: String,
+    pub standing: String,
 }
 
 impl Words {
@@ -337,7 +353,34 @@ impl Words {
             }
         };
 
+        let (standing_label, standing) = match &prompt.standing {
+            Some(offer) => {
+                let minutes = offer.seconds / 60;
+                (
+                    format!("For {minutes} min"),
+                    format!(
+                        "\u{201c}For {minutes} min\u{201d} approves this request and, for {minutes} \
+                         minutes, what {} runs gets {} without asking. It ends sooner when {}\
+                         kagebunshin locks, or when you end it.",
+                        offer.holder,
+                        // No more than was asked about.
+                        match prompt.reason {
+                            ApprovalReason::Keys => format!("these values of {of}"),
+                            _ => of.clone(),
+                        },
+                        if prompt.remote.is_some() {
+                            ""
+                        } else {
+                            "it exits, when "
+                        }
+                    ),
+                )
+            }
+            None => (String::new(), String::new()),
+        };
         Self {
+            standing_label,
+            standing,
             title,
             question,
             summary,
@@ -376,6 +419,7 @@ mod tests {
             remote: None,
             secrets: Vec::new(),
             every_key: false,
+            standing: None,
         }
     }
 
@@ -458,6 +502,61 @@ mod tests {
             ..prompt(ApprovalReason::Marked, &["A"])
         };
         assert!(!Words::of(&script).command_plain);
+    }
+
+    /// Where an approval can be left standing, the prompt has a button for
+    /// it and says what that hands out, to whom, and when it ends: no
+    /// more than was asked about. Anywhere else it says nothing of it.
+    #[test]
+    fn a_prompt_says_what_leaving_it_standing_does() {
+        use crate::ipc::protocol::StandingOffer;
+        let offered = |reason, holder: &str| {
+            let mut p = prompt(reason, &["A"]);
+            p.standing = Some(StandingOffer {
+                seconds: 900,
+                holder: holder.into(),
+            });
+            p
+        };
+        let w = Words::of(&prompt(ApprovalReason::Marked, &["A"]));
+        assert_eq!((w.standing_label.as_str(), w.standing.as_str()), ("", ""));
+        assert_eq!(agent_named("claude"), Some("Claude Code"));
+        assert_eq!(agent_named("opencode-pty"), Some("OpenCode"));
+        assert_eq!(agent_named("bash"), None);
+
+        let w = Words::of(&offered(ApprovalReason::Marked, "Claude Code"));
+        assert_eq!(w.standing_label, "For 15 min");
+        assert_eq!(
+            w.standing,
+            "\u{201c}For 15 min\u{201d} approves this request and, for 15 minutes, what Claude \
+             Code runs gets widget/prod without asking. It ends sooner when it exits, when \
+             kagebunshin locks, or when you end it."
+        );
+        // Some keys marked: those, not the environment.
+        let w = Words::of(&offered(ApprovalReason::Keys, "Claude Code"));
+        assert!(
+            w.standing
+                .contains("gets these values of widget/prod without asking"),
+            "{}",
+            w.standing
+        );
+        // A machine does not exit.
+        let mut remote = offered(ApprovalReason::Marked, "machine laptop");
+        remote.remote = Some(RemotePeer {
+            node: "nLAPTOP".into(),
+            machine: "laptop".into(),
+            user: "dev@example.com".into(),
+            tags: Vec::new(),
+            token: None,
+        });
+        assert!(
+            Words::of(&remote).standing.ends_with(
+                "what machine laptop runs gets widget/prod without asking. It ends sooner when \
+                 kagebunshin locks, or when you end it."
+            ),
+            "{}",
+            Words::of(&remote).standing
+        );
     }
 
     /// A script handed to a shell is the command a person reads, with the

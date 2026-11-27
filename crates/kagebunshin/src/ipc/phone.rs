@@ -53,7 +53,7 @@ use tokio_rustls::TlsAcceptor;
 use tracing::{debug, info, warn};
 
 use super::prompt::Words;
-use super::protocol::RemotePeer;
+use super::protocol::{RemotePeer, StandingView};
 use super::server::ServerConfig;
 use crate::daemon::Daemon;
 use crate::daemon::broker::phone::{Answered, PhoneError, page_site};
@@ -411,6 +411,8 @@ struct State<'a> {
     pairing: Option<u64>,
     prompts: Vec<Waiting>,
     recent: Vec<Answered>,
+    /// The approvals that stand, each with the seconds it has left.
+    standing: Vec<StandingView>,
 }
 
 /// A waiting request: its names, and what the app's prompt says of it.
@@ -446,6 +448,22 @@ struct Subscribed {
     endpoint: String,
     p256dh: String,
     auth: String,
+}
+
+/// The request to approve, and whether its approval is to be left
+/// standing.
+#[derive(Deserialize)]
+struct Begin {
+    id: u64,
+    #[serde(default)]
+    standing: bool,
+}
+
+/// An environment whose standing approvals are to end.
+#[derive(Deserialize)]
+struct Ending {
+    project: ProjectName,
+    env: EnvName,
 }
 
 /// A passkey just made; both base64url.
@@ -561,6 +579,7 @@ async fn answer(
                 PhoneError::Failed(_) => StatusCode::INTERNAL_SERVER_ERROR,
                 PhoneError::NotPaired
                 | PhoneError::NotPairing
+                | PhoneError::NoStanding
                 | PhoneError::DeskOnly
                 | PhoneError::Passkey(_) => StatusCode::FORBIDDEN,
             };
@@ -636,6 +655,7 @@ async fn asked(
                     pairing: page.pairing,
                     prompts,
                     recent: page.recent,
+                    standing: page.standing,
                 },
             ))
         }
@@ -656,8 +676,8 @@ async fn asked(
             done()
         }
         "/approve/begin" => {
-            let Id { id } = parsed(body)?;
-            let begin = daemon.phone_approve_begin(&peer.node, id)?;
+            let Begin { id, standing } = parsed(body)?;
+            let begin = daemon.phone_approve_begin(&peer.node, id, standing)?;
             Ok(json(
                 StatusCode::OK,
                 &serde_json::json!({
@@ -676,6 +696,11 @@ async fn asked(
         "/deny" => {
             let Id { id } = parsed(body)?;
             daemon.phone_deny(peer, id)?;
+            done()
+        }
+        "/standing/end" => {
+            let Ending { project, env } = parsed(body)?;
+            daemon.phone_end_standing(peer, &project, &env)?;
             done()
         }
         "/push/key" => {
@@ -747,7 +772,7 @@ mod tests {
     use crate::config::{Config, Registry, RemoteId, parse_project};
     use crate::daemon::Providers;
     use crate::daemon::push::PushState;
-    use crate::ipc::protocol::{Facts, Request, Response, WireSecret};
+    use crate::ipc::protocol::{Caller, Facts, Request, Response, WireSecret};
     use crate::store::{Passphrase, STORE_FILE, StoreFile};
     use crate::tailnet::fake::FakeTailnet;
     use crate::types::Provider;
@@ -969,6 +994,11 @@ remotes = ["git@github.com:acme/widget.git"]
     /// Asks for the sensitive S while the app is open, so it waits for a
     /// person; the asking, and the id of its prompt.
     async fn asking(d: &Daemon) -> (tokio::task::JoinHandle<Response>, u64) {
+        asking_as(d, crate::test_support::this_process()).await
+    }
+
+    /// [`asking`], by `caller`.
+    async fn asking_as(d: &Daemon, caller: Caller) -> (tokio::task::JoinHandle<Response>, u64) {
         let app = tokio::spawn({
             let d = d.clone();
             async move { d.handle(Request::WaitApprovals { known: Vec::new() }).await }
@@ -977,7 +1007,7 @@ remotes = ["git@github.com:acme/widget.git"]
         let asked = tokio::spawn({
             let d = d.clone();
             async move {
-                d.handle(Request::Get {
+                let get = Request::Get {
                     facts: Facts {
                         cwd: "/src/widget".into(),
                         remotes: vec![
@@ -993,8 +1023,8 @@ remotes = ["git@github.com:acme/widget.git"]
                     },
                     key: "S".parse().unwrap(),
                     passphrase: pw("pw"),
-                })
-                .await
+                };
+                d.handle_from(get, &caller).await
             }
         });
         let Response::Approvals { pending } = app.await.unwrap() else {
@@ -1214,6 +1244,43 @@ remotes = ["git@github.com:acme/widget.git"]
         d.lock();
         let reply = page(&tailnet, &d, "/push/key", json!({})).await;
         assert_eq!(reply.status, StatusCode::FORBIDDEN);
+    }
+
+    /// The page says what stands and ends it, for the paired phone only,
+    /// and asks to leave standing only an approval whose prompt offers it.
+    #[tokio::test]
+    async fn the_page_lists_and_ends_what_stands() {
+        let tmp = tempfile::tempdir().unwrap();
+        let tailnet = tailnet();
+        let d = daemon(tmp.path(), &tailnet).await;
+        paired(&tailnet, &d).await;
+        assert_eq!(state(&tailnet, &d).await["standing"], json!([]));
+
+        // Asked by a process no agent stands behind.
+        let nobody = crate::test_support::Orphan::start();
+        let (asked, id) = asking_as(&d, nobody.caller()).await;
+        let begin = json!({ "id": id, "standing": true });
+        let reply = page(&tailnet, &d, "/approve/begin", begin).await;
+        assert_eq!(reply.status, StatusCode::FORBIDDEN);
+        assert_eq!(reply.error(), "that request is approved for itself only");
+        assert!(!asked.is_finished());
+        let reply = page(&tailnet, &d, "/deny", json!({ "id": id })).await;
+        assert_eq!(reply.status, StatusCode::OK);
+        asked.await.unwrap();
+
+        let ending = json!({ "project": "widget", "env": "dev" });
+        let reply = page(&tailnet, &d, "/standing/end", ending.clone()).await;
+        assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+        let reply = send(TABLET, &tailnet, &d, post("/standing/end", &ending)).await;
+        assert_eq!(reply.status, StatusCode::FORBIDDEN);
+        let reply = page(
+            &tailnet,
+            &d,
+            "/standing/end",
+            json!({ "project": "not a name" }),
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::BAD_REQUEST);
     }
 
     /// The phone pairs over the page with a passkey it makes, is shown a

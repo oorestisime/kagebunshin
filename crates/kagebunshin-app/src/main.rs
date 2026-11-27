@@ -641,7 +641,18 @@ fn on_close(s: &mut App, tx: &mut Tx) {
 /// those typed, for at least one key; they stay in their fields until the
 /// daemon takes them. Enter in a value's field, the passphrase not typed
 /// yet, moves there.
-fn approve(s: &mut App, _: &mut Tx) {
+fn approve(s: &mut App, tx: &mut Tx) {
+    answer(s, tx, false);
+}
+
+/// Approves the request asked about and leaves the approval standing.
+fn approve_standing(s: &mut App, tx: &mut Tx) {
+    answer(s, tx, true);
+}
+
+/// Approves the request asked about with what is typed; `standing` leaves
+/// the approval standing, where the request offers that.
+fn answer(s: &mut App, _: &mut Tx, standing: bool) {
     let (Some(approver), Some(prompt)) = (&s.approver, s.approvals.first()) else {
         return;
     };
@@ -671,6 +682,7 @@ fn approve(s: &mut App, _: &mut Tx) {
         id: prompt.id,
         passphrase: Some(passphrase),
         values,
+        standing: standing && prompt.standing.is_some(),
     });
     s.answering = true;
     s.approval_error = None;
@@ -1524,6 +1536,8 @@ fn approval_prompt(p: Paint, s: &App, prompt: &ApprovalPrompt) -> El {
         detail,
         why,
         trust,
+        standing_label,
+        standing,
     } = Words::of(prompt);
     let shown = shown.as_str();
     let command = col()
@@ -1709,6 +1723,9 @@ fn approval_prompt(p: Paint, s: &App, prompt: &ApprovalPrompt) -> El {
                 quiet("kb-approval-trust", trust),
             ));
         }
+        if !standing.is_empty() {
+            details = details.child(quiet("kb-approval-standing-text", &standing));
+        }
         body = body.child(details);
     }
 
@@ -1763,6 +1780,16 @@ fn approval_prompt(p: Paint, s: &App, prompt: &ApprovalPrompt) -> El {
                 .a11y_hidden()
                 .grow(1.0),
             )
+            // Beside the one that approves once, and never what Enter does.
+            .children((!standing_label.is_empty()).then(|| {
+                button(
+                    p,
+                    "kb-approval-standing",
+                    &standing_label,
+                    ready,
+                    approve_standing,
+                )
+            }))
             .child(
                 button(
                     p,
@@ -2654,6 +2681,9 @@ fn main_pane(p: Paint, s: &App) -> El {
         }
         body = body.child(banner);
     }
+    if !s.machine.standing.is_empty() {
+        body = body.child(standing_card(p, s));
+    }
     if !s.machine.waiting.is_empty() {
         body = body.child(waiting_card(p, s));
     }
@@ -2998,6 +3028,47 @@ fn tabs(p: Paint, s: &App, shown: &Shown) -> El {
                     View::Sources,
                 )),
         )
+}
+
+/// The approvals that stand: who gets which environment without being
+/// asked, for how long, and the button that ends it. Ending takes no
+/// passphrase: it only tightens.
+fn standing_card(p: Paint, s: &App) -> El {
+    let mut c = card(p).key("kb-standing");
+    for (i, stands) in s.machine.standing.iter().enumerate() {
+        let (project, env) = (stands.project.clone(), stands.env.clone());
+        c = c.child(
+            row()
+                .w_full()
+                .gap(space::S3)
+                .center_y()
+                .child(
+                    text(format!(
+                        "{} gets {}/{} without asking, for {} more",
+                        stands.holder,
+                        stands.project,
+                        stands.env,
+                        time_left(stands.left)
+                    ))
+                    .key(format!("kb-standing-{i}"))
+                    .font(BODY)
+                    .color(p.t.text)
+                    .wrap()
+                    .grow(1.0),
+                )
+                .child(button(
+                    p,
+                    &format!("kb-standing-end-{i}"),
+                    "End now",
+                    true,
+                    move |s, tx| {
+                        let (project, env) = (project.clone(), env.clone());
+                        send(s, Event::EndStanding { project, env }, Some(tx));
+                    },
+                )),
+        );
+    }
+    c
 }
 
 /// What the configuration of the project on show could do better: the
@@ -6624,8 +6695,25 @@ mod scenes {
             remote: None,
             secrets: vec![Origin::new(Provider::AwsSm, "acme/shared/stripe")],
             every_key: false,
+            // A coding agent stands behind it: the approval can stand.
+            standing: Some(kagebunshin::ipc::protocol::StandingOffer {
+                seconds: 900,
+                holder: "Claude Code".into(),
+            }),
         }];
         s.approval_passphrase.focused = true;
+    }
+
+    /// An approval was left standing: the agent it is for gets that
+    /// environment without asking, until it ends or is ended.
+    pub fn standing(s: &mut App) {
+        unlocked(s);
+        s.machine.standing = vec![kagebunshin::ipc::protocol::StandingView {
+            project: "widget".parse().unwrap(),
+            env: "prod".parse().unwrap(),
+            holder: "Claude Code".into(),
+            left: 700,
+        }];
     }
 
     /// An agent's `run` in an environment that looks like production,
@@ -6653,6 +6741,7 @@ mod scenes {
             remote: None,
             secrets: Vec::new(),
             every_key: false,
+            standing: None,
         }];
         s.approval_passphrase.focused = true;
     }
@@ -6811,6 +6900,7 @@ mod scenes {
             remote: None,
             secrets: Vec::new(),
             every_key: false,
+            standing: None,
         }
     }
 
@@ -6865,6 +6955,7 @@ mod scenes {
             remote: None,
             secrets: Vec::new(),
             every_key: false,
+            standing: None,
         }
     }
 
@@ -7144,6 +7235,7 @@ mod scenes {
         ("proton", proton),
         ("approval", approval),
         ("approval-details", approval_details),
+        ("standing", standing),
         ("approval-proton", approval_proton),
         ("approval-waiting", approval_waiting),
         ("approval-script", approval_script),
@@ -7357,6 +7449,7 @@ mod tests {
             shared: Vec::new(),
             app: false,
             phone: None,
+            standing: Vec::new(),
         })
     }
 
@@ -8473,6 +8566,94 @@ mod tests {
         assert!(!rt.state.answering);
     }
 
+    /// A request a coding agent stands behind has a second button, which
+    /// approves it and leaves the approval standing; Enter and Approve
+    /// approve once, as ever. A request nobody stands behind has none.
+    #[test]
+    fn an_approval_is_left_standing_from_its_own_button() {
+        let (approver, sent, _feed) = crate::daemon::Approver::fake();
+        let mut s = fixed(scenes::approval);
+        s.approver = Some(approver);
+        let mut rt = runtime(s);
+        rt.poll = Some(poll);
+        assert!(texts(&rt).contains("For 15 min"));
+        // What it does is with the rest, a click away.
+        assert!(!texts(&rt).contains("without asking"));
+        click(&mut rt, "kb-approval-toggle");
+        let all = texts(&rt);
+        let says = "what Claude Code runs gets these values of widget/dev without asking";
+        assert!(all.contains(says), "{all}");
+
+        // Nothing without the passphrase.
+        click(&mut rt, "kb-approval-standing");
+        assert!(sent.try_recv().is_err());
+        click(&mut rt, "kb-approval-field");
+        rt.paste("correct horse");
+        rt.frame(0.0);
+        click(&mut rt, "kb-approval-standing");
+        let answer = sent.try_recv().unwrap();
+        assert_eq!(
+            (
+                answer.id,
+                answer.passphrase.unwrap().expose(),
+                answer.standing
+            ),
+            (1, "correct horse", true)
+        );
+
+        // Approve, and Enter, approve the one request.
+        let (approver, sent, _feed) = crate::daemon::Approver::fake();
+        let mut s = fixed(scenes::approval);
+        s.approver = Some(approver);
+        let mut rt = runtime(s);
+        rt.paste("correct horse");
+        rt.frame(0.0);
+        click(&mut rt, "kb-approval-ok");
+        assert!(!sent.try_recv().unwrap().standing);
+
+        let rt = runtime(fixed(scenes::approval_waiting));
+        assert!(rt.find("kb-approval-standing").is_none());
+        assert!(!texts(&rt).contains("For 15 min"));
+    }
+
+    /// What stands is listed above everything, with who it is for and the
+    /// time left, and ended from there with no passphrase.
+    #[test]
+    fn what_stands_is_listed_and_ended() {
+        let rt = runtime(fixed(scenes::unlocked));
+        assert!(rt.find("kb-standing").is_none());
+
+        // The daemon says what stands with each probe.
+        let mut probed = fixed(scenes::standing);
+        let Response::Status(mut report) = up(false) else {
+            unreachable!()
+        };
+        report.standing = std::mem::take(&mut probed.machine.standing);
+        let fake = FakeClient::default();
+        fake.reply(Ok(Response::Status(report)))
+            .reply(Ok(Response::StandingEnded { ended: 1 }))
+            .reply(Ok(up(false)));
+        let mut rt = live(scenes::unlocked, &fake);
+        until(&mut rt, |s| !s.machine.standing.is_empty());
+        rt.frame(0.1);
+        let all = texts(&rt);
+        let says = "Claude Code gets widget/prod without asking, for 12 min more";
+        assert!(all.contains(says), "{all}");
+        click(&mut rt, "kb-standing-end-0");
+        assert!(rt.state.machine.standing.is_empty());
+        assert!(rt.find("kb-standing").is_none());
+        until(&mut rt, |_| fake.asked.lock().unwrap().len() >= 3);
+        let asked = fake.asked.lock().unwrap();
+        assert_eq!(
+            asked[1],
+            Request::EndStanding {
+                project: "widget".parse().unwrap(),
+                env: "prod".parse().unwrap(),
+            }
+        );
+        assert_eq!(asked[2], Request::Status { facts: None });
+    }
+
     /// A desktop that records what it is asked to do.
     #[derive(Clone, Default)]
     struct FakeDesk {
@@ -9080,6 +9261,7 @@ mod tests {
             shared: scenes::shared(),
             app: false,
             phone: None,
+            standing: Vec::new(),
         })));
         let mut rt = live(scenes::waiting, &fake);
         until(&mut rt, |s| !s.machine.shared.is_empty());
@@ -9157,6 +9339,7 @@ mod tests {
             shared: scenes::marked(),
             app: false,
             phone: None,
+            standing: Vec::new(),
         })));
         let mut rt = live(scenes::waiting, &fake);
         until(&mut rt, |s| !s.machine.shared.is_empty());

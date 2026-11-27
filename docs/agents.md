@@ -319,7 +319,8 @@ What needs the store passphrase (`get`, `unlock`, store writes other than
 an `onboard` you approve in the app or a `store set` whose values you type
 there, which are refused with `no_app` while the app is closed); `status` and `diff` of an environment marked sensitive; and any `run` that would
 inject a sensitive key, unless you approve it in the app or on your paired phone (the whole command
-waits, not just that key). Each comes back with an error code, a hint, and
+waits, not just that key; a person may leave that approval standing for 15 minutes, and the agent's
+next run for the same environment then does not wait). Each comes back with an error code, a hint, and
 who can fix it: `agent` when the agent can run the command itself, `human`
 with a `tell`, one sentence for the agent to pass on to you as it is, such
 as "unlock kagebunshin: run `kagebunshin unlock` in a terminal". In text it

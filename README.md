@@ -70,7 +70,8 @@ secret, only that it is there.
   for what shows a human is there: a passphrase, an approval.
 - **Production waits for you.** What is marked sensitive, an agent cannot
   get by itself. The command waits while the app, or your paired phone,
-  shows you what asks for which keys, and you approve that one request. Every refusal and every
+  shows you what asks for which keys, and you approve that one request, or let the approval stand
+  for 15 minutes for an agent that will ask again. Every refusal and every
   hand-out of a marked value goes in an audit log, by name.
 
 <p align="center">
@@ -220,7 +221,7 @@ they need and keeps the values with the original.
 ## Status
 
 > [!NOTE]
-> **Alpha**; the latest build is v0.0.1-alpha.18.
+> **Alpha**; the latest build is v0.0.1-alpha.19.
 
 There are binaries for Linux x86_64 and aarch64 (glibc 2.35 or later)
 and for macOS arm64. The macOS

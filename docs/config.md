@@ -284,6 +284,10 @@ kagebunshin status
   under Details, by name and never a value. Approve asks for the passkey; Deny asks for nothing, as
   in the app. The first answer counts, wherever it is given, and the
   other side says where that was.
+- Where the request is a coding agent's or another machine's, "Approve
+  for 15 min" approves it and lets that agent have the same environment
+  again for 15 minutes without asking, as the app's button does. The
+  page lists what stands, with an End button that asks for nothing.
 - The phone approves hand-outs only. Unlocking, an import, values an
   agent asks you to type, removing a mark and the grants stay at this
   computer, with the passphrase; the page shows an import or a request to

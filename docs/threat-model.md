@@ -35,7 +35,9 @@ Against that agent kagebunshin:
   environment, and out of `status`, `diff`, `audit`, errors and logs;
 - hands out a marked environment, secret or key only once you approve
   that one request: in the app, with the store passphrase, or on the
-  [phone you paired](#the-paired-phone), with its passkey;
+  [phone you paired](#the-paired-phone), with its passkey. An approval
+  covers more than its request only where you
+  [leave it standing](#an-approval-left-standing);
 - keeps human-only actions (`get`, `unlock`, store writes) behind the
   store passphrase;
 - masks values in the piped output of `run`, so a stray `printenv` in a
@@ -130,6 +132,41 @@ What needs you is decided by explicit marks, see
 - **Approving trusts the command.** A script an agent wrote can print or
   send on the value it was given; the prompt says so under Details, not
   on its face, so that a request answered many times a day stays short.
+- <a id="an-approval-left-standing"></a>**An approval left standing.**
+  Where a coding agent or another machine asks, the prompt has a second
+  button, "For 15 min". It approves the request as Approve does, with
+  the same passphrase or passkey, and for the next 15 minutes that agent
+  or machine gets the same environment again with nobody asked. It is
+  for an agent that runs the same deploy or migration several times in a
+  row. What it covers, and what ends it:
+  - One environment of one project, read from the sources it had, and no
+    key the prompt did not cover: where some keys are marked, those
+    keys. A request for another environment, from other sources or for
+    a key marked since is asked about as ever.
+  - Any command, not the one you approved: approving already trusts
+    what the agent runs with the values, and the agent chooses its
+    commands.
+  - One holder. On this machine it is the nearest process among the
+    caller's parents that is named as a coding agent kagebunshin knows,
+    and what counts afterwards is descending from that very process (its
+    pid and start time), which a process cannot arrange for itself.
+    That the process is the agent rests on its name, as in the prompt:
+    a process can call itself anything, but one that does so still
+    needs your approval, and gets it only for what it starts. Where an
+    agent runs its commands through one helper for all its sessions, as
+    OpenCode's desktop app does, the holder is that helper, so the
+    approval is for every session of it. For another machine it is
+    that machine's Tailscale node, while its grant lasts. A request no
+    agent or machine is behind, such as a command you type, is not
+    offered the button.
+  - It ends after 15 minutes, when the agent's process exits, when the
+    daemon locks or stops (it is kept in memory only), or when you end
+    it: `status` and the app list what stands, the app and the phone's
+    page end one with no proof, and `kagebunshin lock` ends them all.
+  - Leaving one standing is in the audit log (`approval stands`), and so
+    are each hand-out under it (`use approval`, with the program and the
+    keys) and its ending by a person (`end approval`). A hand-out under
+    it is refused if it cannot be recorded.
 - **When marks apply:** they are read at hand-out time from the unlocked
   store, so a new mark applies at once, without a `sync`.
 - **Removing a mark:** it is confirmed in the app's window and takes the
@@ -370,7 +407,11 @@ person is there, so this is what it rests on:
   values. What writes the store or loosens anything (unlocking, imports,
   typed values, removing a mark, grants) takes the passphrase at this
   computer, and the phone has none. The paired phone can deny any
-  request, with no proof, as closing the app's window does.
+  request, with no proof, as closing the app's window does. It can
+  [leave an approval standing](#an-approval-left-standing) where the
+  prompt offers that: which of the two it approves is fixed when the
+  challenge is made, so the passkey signs the answer that was asked for.
+  It lists what stands and can end it, with no proof.
 - **What is recorded.** Each answer from the phone and each pairing is in
   the audit log with the phone and its user as Tailscale names them. An
   approval counts only once it is recorded. A signature that does not

@@ -456,6 +456,28 @@ fn the_setup_walk() {
     std::thread::sleep(Duration::from_secs(2));
     w.r("kagebunshin --env prod run -- ./test.sh");
     app.wait().unwrap();
+    w.note("a coding agent's command asks (a process named claude runs it) and the human clicks For 15 min: that agent's next run of api/prod is not asked about, with the app closed, and status says what stands");
+    // The kernel names a process by the path it was run as.
+    std::os::unix::fs::symlink("/bin/sh", w.sb.root().join("claude")).unwrap();
+    let mut app = w.sb.app(
+        &w.sb.root().join("work/api"),
+        7.0,
+        Some(&json!([
+            { "t": 3.5, "type": "click", "key": "kb-approval-field" },
+            { "t": 4, "type": "type", "text": PASS },
+            { "t": 5, "type": "click", "key": "kb-approval-standing" },
+        ])),
+    );
+    std::thread::sleep(Duration::from_secs(2));
+    w.r("../../claude -c 'kagebunshin --env prod run -- ./test.sh >/dev/null; echo \"first run: exit $?\"; sleep 4; kagebunshin --env prod run -- ./test.sh >/dev/null; echo \"second run: exit $?\"; kagebunshin status | grep approval:'");
+    app.wait().unwrap();
+    w.sb.audited("approval stands", "api", "prod");
+    w.sb.audited("use approval", "api", "prod");
+    w.note(
+        "it was that agent's: with its process gone nothing stands, and a run is refused as before",
+    );
+    w.r("kagebunshin --env prod run -- ./test.sh");
+    w.r("kagebunshin status | grep -c approval:");
     w.note("the human, in the app: shop/prod -> Not production");
     in_app(
         &w.sb,

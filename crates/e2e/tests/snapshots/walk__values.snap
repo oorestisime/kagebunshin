@@ -22,12 +22,6 @@ kagebunshin: environment dev of project api has no key LOG_LEVEL
 [exit 1]
 
 $ kagebunshin audit | grep -E 'api/prod|api/rc|shop/prod' | tail -20
-<time> denied  run api/production pid <n> program ./test.sh: environment production of project api looks like production (its name has the segment production) and waits for a human decision
-<time> denied  run api/production pid <n> program ./test.sh: environment production of project api looks like production (its name has the segment production) and waits for a human decision
-<time> allowed add mark env api/production pid <n>
-<time> denied  status api/production pid <n>: refusing environment production of project api: it is marked sensitive
-<time> denied  run api/prod pid <n> program ./test.sh: refusing environment prod of project api: it is marked sensitive; handing it out takes approval in the app, which is not open
-<time> allowed project add-env api/rc pid <n>
 <time> allowed project add-env shop/prod pid <n>
 <time> allowed mark env api/rc pid <n>
 <time> denied  run api/prod pid <n> program ./test.sh: refusing environment prod of project api: it is marked sensitive; handing it out takes approval in the app, which is not open
@@ -40,5 +34,11 @@ $ kagebunshin audit | grep -E 'api/prod|api/rc|shop/prod' | tail -20
 <time> denied  run api/prod pid <n> program ./test.sh: environment prod of project api: a person denied the request, so nothing was handed out. It asked for every value of the environment, which is marked sensitive
 <time> allowed ask approval api/prod pid <n> program ./test.sh keys API_KEY,API_URL,DATABASE_URL,LOG_LEVEL,SIGNING_KEY (run)
 <time> allowed run api/prod pid <n> program ./test.sh keys API_KEY,API_URL,DATABASE_URL
+<time> allowed ask approval api/prod pid <n> program ./test.sh keys API_KEY,API_URL,DATABASE_URL,LOG_LEVEL,SIGNING_KEY (run)
+<time> allowed approval stands api/prod pid <n> (for Claude Code, 15 minutes)
+<time> allowed run api/prod pid <n> program ./test.sh keys API_KEY,API_URL,DATABASE_URL
+<time> allowed use approval api/prod pid <n> program ./test.sh keys API_KEY,API_URL,DATABASE_URL,LOG_LEVEL,SIGNING_KEY (run, standing for Claude Code)
+<time> allowed run api/prod pid <n> program ./test.sh keys API_KEY,API_URL,DATABASE_URL
+<time> denied  run api/prod pid <n> program ./test.sh: refusing environment prod of project api: it is marked sensitive; handing it out takes approval in the app, which is not open
 <time> allowed acknowledge env shop/prod pid <n>
 <time> denied  add mark env shop/prod pid <n>: environment prod of project shop is acknowledged as not production; a human decided that, and only they change it, in the app

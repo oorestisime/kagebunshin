@@ -2095,6 +2095,19 @@ fn render_status(
     if let Some(phone) = &r.phone {
         render_phone(&mut out, phone);
     }
+    // What goes out with nobody asked, and how it is stopped from here.
+    for s in &r.standing {
+        out.push_str(&format!(
+            "\napproval: {} gets {}/{} without asking, for {} more (`kagebunshin lock` ends it)",
+            s.holder,
+            s.project,
+            s.env,
+            match s.left {
+                left if left < 60 => format!("{left}s"),
+                left => format!("{}m", left.div_ceil(60)),
+            }
+        ));
+    }
     let Some(env) = &r.env else {
         if let Some(runs) = runs {
             out.push_str(&format!("\n{}", runs.line(false)));
@@ -2576,6 +2589,7 @@ mod tests {
             shared: Vec::new(),
             app: false,
             phone: None,
+            standing: Vec::new(),
         };
         let text = render_status(&status, &[], &[], None);
         assert!(!text.contains("shared with"), "{text}");
@@ -2704,6 +2718,7 @@ mod tests {
             shared: Vec::new(),
             app: false,
             phone: None,
+            standing: Vec::new(),
         };
         let text = render_status(&status, &[], &[], None);
         assert!(
@@ -2772,6 +2787,7 @@ mod tests {
             shared: Vec::new(),
             app: false,
             phone: None,
+            standing: Vec::new(),
         };
         let text = render_status(&status, &[], &[], None);
         let rows: Vec<&str> = text
@@ -2784,6 +2800,42 @@ mod tests {
             "{text}"
         );
         assert!(rows[2].ends_with("project file  = 3000"), "{text}");
+    }
+
+    /// `status` says what goes out without a person being asked, to
+    /// whom, for how much longer, and how to stop it.
+    #[test]
+    fn status_names_the_approvals_that_stand() {
+        use crate::ipc::protocol::StandingView;
+        let mut status = StatusReport {
+            locked: false,
+            env: None,
+            expiring: Vec::new(),
+            remote: None,
+            waiting: Vec::new(),
+            acknowledged: Vec::new(),
+            shared: Vec::new(),
+            app: false,
+            phone: None,
+            standing: Vec::new(),
+        };
+        assert!(!render_status(&status, &[], &[], None).contains("approval:"));
+        status.standing = [("Claude Code", 700), ("machine laptop", 42)]
+            .map(|(holder, left)| StandingView {
+                project: "widget".parse().unwrap(),
+                env: "prod".parse().unwrap(),
+                holder: holder.into(),
+                left,
+            })
+            .into();
+        assert_eq!(
+            render_status(&status, &[], &[], None),
+            "daemon: unlocked\n\
+             approval: Claude Code gets widget/prod without asking, for 12m more (`kagebunshin \
+             lock` ends it)\n\
+             approval: machine laptop gets widget/prod without asking, for 42s more \
+             (`kagebunshin lock` ends it)"
+        );
     }
 
     #[test]

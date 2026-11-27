@@ -170,6 +170,27 @@ MISSING SIGNING_KEY
 MISSING LOG_LEVEL
 [exit 1]
 
+-- a coding agent's command asks (a process named claude runs it) and the human clicks For 15 min: that agent's next run of api/prod is not asked about, with the app closed, and status says what stands
+
+$ ../../claude -c 'kagebunshin --env prod run -- ./test.sh >/dev/null; echo "first run: exit $?"; sleep 4; kagebunshin --env prod run -- ./test.sh >/dev/null; echo "second run: exit $?"; kagebunshin status | grep approval:'
+kagebunshin: warning: 2 keys in .env.example are not set by any source: SIGNING_KEY, LOG_LEVEL
+first run: exit 1
+kagebunshin: warning: 2 keys in .env.example are not set by any source: SIGNING_KEY, LOG_LEVEL
+second run: exit 1
+approval: Claude Code gets api/prod without asking, for 15m more (`kagebunshin lock` ends it)
+
+-- it was that agent's: with its process gone nothing stands, and a run is refused as before
+
+$ kagebunshin --env prod run -- ./test.sh
+kagebunshin: refusing environment prod of project api: it is marked sensitive; handing it out takes approval in the app, which is not open
+hint: once the app is open, run the command again; the app asks to approve it
+ask the human: open the app (`kagebunshin app`), so a request for values marked sensitive can be approved there
+[exit 5]
+
+$ kagebunshin status | grep -c approval:
+0
+[exit 1]
+
 -- the human, in the app: shop/prod -> Not production
 
 $ kagebunshin --env prod status
