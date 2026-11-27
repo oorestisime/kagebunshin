@@ -4065,8 +4065,14 @@ impl Daemon {
             Answer::Approved(Approved { standing, .. }) | Answer::ApprovedOnPhone { standing } => {
                 (Decision::Allowed, standing)
             }
-            Answer::Denied => (Decision::Denied, false),
-            Answer::TimedOut => (Decision::TimedOut, false),
+            Answer::Denied => {
+                info!(%project, %env, "a person denied the request");
+                (Decision::Denied, false)
+            }
+            Answer::TimedOut => {
+                info!(%project, %env, "nobody answered the request in time");
+                (Decision::TimedOut, false)
+            }
             Answer::CallerGone => {
                 info!(%project, %env, "the caller ended while waiting for approval");
                 *ask.approval.lock().unwrap_or_else(PoisonError::into_inner) =
@@ -4604,17 +4610,18 @@ impl Daemon {
         let Some((_, _, reply)) = waiting else {
             return Err(ResolveError::NoApproval(id));
         };
+        let answer = if approved.is_some() {
+            "approved"
+        } else {
+            "denied"
+        };
         // Fails only if the request stopped waiting just now; it is then
         // refused anyway.
-        let approved = match reply.send(Reply::Desk(approved)) {
-            Ok(()) => true,
-            Err(sent) => {
-                debug!(id, "an answered request stopped waiting");
-                matches!(sent, Reply::Desk(Some(_)))
-            }
-        };
+        if reply.send(Reply::Desk(approved)).is_err() {
+            debug!(id, "an answered request stopped waiting");
+        }
         self.inner.approvals_changed.send_modify(|n| *n += 1);
-        info!(id, approved, "answered an approval");
+        info!(id, answer, "a request was answered in the app");
         Ok(self.inner.approvals().prompts())
     }
 
@@ -5072,7 +5079,8 @@ async fn watch_idle(inner: Weak<Inner>, id: u64) {
 }
 
 /// What to tell the human so the daemon unlocks.
-pub const UNLOCK_TELL: &str = "unlock kagebunshin: run `kagebunshin unlock` in a terminal";
+pub const UNLOCK_TELL: &str =
+    "unlock kagebunshin: run `kagebunshin unlock` in a terminal, or use Unlock in the app";
 
 /// The wire form of a resolve error, with the hint the CLI shows and, where
 /// it is known, who can fix it.
@@ -5112,7 +5120,11 @@ pub fn wire_error(e: &ResolveError) -> WireError {
         } => waiting(project, env),
         ResolveError::Sensitive { .. } | ResolveError::SensitiveKey { .. } => hinted(
             ErrorCode::SensitiveEnv,
-            Some("the daemon does not hand out values marked sensitive"),
+            Some(
+                "what is marked sensitive is not shown by `status` or `diff`; `kagebunshin run -- \
+                 COMMAND` gets its values once a person approves that request, in the app or on \
+                 their paired phone",
+            ),
         ),
         ResolveError::NoApp(inner) => match &**inner {
             ResolveError::Sensitive {

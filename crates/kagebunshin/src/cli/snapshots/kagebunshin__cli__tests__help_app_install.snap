@@ -2,7 +2,7 @@
 source: crates/kagebunshin/src/cli/mod.rs
 expression: text
 ---
-Add the app to the launcher and start it in the tray at login (Linux)
+Add the app to the launcher and to login (Linux), or to ~/Applications (macOS)
 
 Usage: kagebunshin app install [OPTIONS]
 

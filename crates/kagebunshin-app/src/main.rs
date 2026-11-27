@@ -1184,7 +1184,7 @@ fn view(s: &App, cx: &mut Cx<App>) -> El {
         .w_full()
         .h_full()
         .fill(p.t.bg)
-        .child(header(p, s));
+        .child(header(p, s, cx.titlebar_inset()));
     if let Conn::Down(problem) = &s.machine.conn {
         window = window.child(
             problem_box(p, "kb-conn-problem", problem)
@@ -2377,7 +2377,9 @@ fn field(
         .on_edit(access)
 }
 
-fn header(p: Paint, s: &App) -> El {
+/// The bar across the top. On macOS the window's own buttons are drawn
+/// over its start, `lights` points in: the name begins past them.
+fn header(p: Paint, s: &App, lights: f32) -> El {
     let conn = &s.machine.conn;
     let idle = s.machine.pending == Pending::None;
     let lock = match conn {
@@ -2402,9 +2404,10 @@ fn header(p: Paint, s: &App) -> El {
     };
     row()
         .key("kb-header")
-        .h(48.0)
+        .h(HEADER)
         .w_full()
-        .px(space::S6)
+        .pl(space::S6.max(lights + space::S3))
+        .pr(space::S6)
         .center_y()
         .justify_between()
         .child(
@@ -7257,6 +7260,27 @@ mod scenes {
 
 const SIZE: (f32, f32) = (980.0, 640.0);
 
+/// The height of the bar across the top.
+const HEADER: f32 = 48.0;
+
+/// The window's frame. On macOS it has no title bar of its own: the bar
+/// across the top is it, with the window's buttons centred in its height
+/// (they are 14 points tall). Elsewhere the desktop frames the window, and
+/// a snapshot is drawn as that unless `--chrome` asks for the Mac's.
+fn chrome() -> rune::Chrome {
+    if cfg!(target_os = "macos") || std::env::args().any(|a| a == "--chrome") {
+        rune::Chrome {
+            traffic_lights: Some((16.0, (HEADER - 14.0) / 2.0)),
+            ..rune::Chrome::DEFAULT
+        }
+    } else {
+        rune::Chrome {
+            full_size_content: false,
+            ..rune::Chrome::DEFAULT
+        }
+    }
+}
+
 fn main() -> std::process::ExitCode {
     rune::set_app_id("io.github.oorestisime.kagebunshin");
     let spec = AppSpec::<App> {
@@ -7270,7 +7294,7 @@ fn main() -> std::process::ExitCode {
     // A scene, a snapshot or a script: one window that ends when it is
     // done, with no tray and without reaching for a running app.
     if rune::is_headless() {
-        rune::run(spec);
+        rune::App::new(spec).chrome(chrome()).run();
         return std::process::ExitCode::SUCCESS;
     }
     match resident(spec) {
@@ -7324,7 +7348,7 @@ fn resident(spec: AppSpec<App>) -> Result<(), String> {
         }
     };
 
-    let app = rune::App::new(spec).on_close(on_close);
+    let app = rune::App::new(spec).chrome(chrome()).on_close(on_close);
     let handle = app.handle();
     let show = {
         let handle = handle.clone();

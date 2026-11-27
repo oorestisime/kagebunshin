@@ -1,5 +1,6 @@
 //! `app install|uninstall`: puts the app in the desktop's launcher and
-//! starts it in the tray at login, on Linux.
+//! starts it in the tray at login, on Linux; on macOS, makes it an app
+//! there, `~/Applications/Kagebunshin.app` ([`write_bundle`]).
 //!
 //! Three files, each named for the app id its windows carry: a launcher
 //! entry, a login entry that starts the app with `--hidden`, and the icon
@@ -36,6 +37,13 @@ const ICON: &str = include_str!("../../../../packaging/icons/kagebunshin.svg");
 
 const LAUNCHER: &str = "launcher";
 const LOGIN: &str = "login entry";
+
+/// The app as macOS knows one: a folder with the binary, what says which
+/// app it is, and its icon. Finder, Spotlight, Launchpad and the Dock show
+/// only these.
+const BUNDLE: &str = "Kagebunshin.app";
+const ICNS: &[u8] = include_bytes!("../../../../packaging/icons/kagebunshin.icns");
+const APP: &str = "app";
 
 /// The app's unit, where the daemon is a systemd user service.
 const APP_UNIT: &str = "kagebunshin-app.service";
@@ -165,6 +173,211 @@ Exec={exec} --quit
     })
 }
 
+/// Where the app's bundle goes on macOS: the user's own Applications
+/// folder, which needs no administrator and is searched like the system's.
+pub(super) fn bundle_path() -> Result<PathBuf, CliError> {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .map(|home| home.join("Applications").join(BUNDLE))
+        .ok_or_else(|| failed("HOME is not set to an absolute path".into()))
+}
+
+/// The bundle's `Info.plist`: what macOS reads of an app before it runs.
+/// It carries [`MARK`], as a comment.
+fn info_plist() -> String {
+    let (id, version) = (units::LABEL, env!("CARGO_PKG_VERSION"));
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- {MARK} -->
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>{id}</string>
+	<key>CFBundleName</key>
+	<string>Kagebunshin</string>
+	<key>CFBundleDisplayName</key>
+	<string>Kagebunshin</string>
+	<key>CFBundleExecutable</key>
+	<string>{}</string>
+	<key>CFBundleIconFile</key>
+	<string>kagebunshin</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleShortVersionString</key>
+	<string>{version}</string>
+	<key>CFBundleVersion</key>
+	<string>{version}</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>11.0</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.developer-tools</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+</dict>
+</plist>
+"#,
+        super::APP
+    )
+}
+
+/// Whether the bundle at `bundle` is one kagebunshin wrote.
+pub(super) fn bundle_managed(bundle: &Path) -> bool {
+    bundle.symlink_metadata().is_ok_and(|m| m.is_dir())
+        && managed(&bundle.join("Contents/Info.plist"))
+}
+
+/// Makes `bundle` the app whose binary is `app`, or brings it up to date,
+/// and returns the binary in it: run from there, the window is that app's,
+/// with its name and icon. The binary is a copy, written beside the old
+/// one and renamed over it, so an app that runs keeps its file. One that
+/// is as new as `app`, with this build's `Info.plist`, is left as it is.
+/// A bundle kagebunshin did not write is not touched.
+pub(super) fn write_bundle(bundle: &Path, app: &Path) -> Result<PathBuf, String> {
+    let io = |what: &Path| {
+        let what = what.display().to_string();
+        move |e: std::io::Error| format!("cannot write {what}: {e}")
+    };
+    match bundle.symlink_metadata() {
+        Err(_) => {}
+        Ok(_) if bundle_managed(bundle) => {}
+        Ok(_) => return Err(format!("{} is not kagebunshin's", bundle.display())),
+    }
+    let contents = bundle.join("Contents");
+    let (plist, inner) = (
+        contents.join("Info.plist"),
+        contents.join("MacOS").join(super::APP),
+    );
+    let text = info_plist();
+    let written = |p: &Path| p.metadata().and_then(|m| m.modified()).ok();
+    let current = std::fs::read_to_string(&plist).is_ok_and(|t| t == text)
+        && matches!((written(&inner), written(app)), (Some(copy), Some(of)) if copy >= of);
+    if current {
+        return Ok(inner);
+    }
+    let resources = contents.join("Resources");
+    for dir in [&contents.join("MacOS"), &resources] {
+        std::fs::create_dir_all(dir).map_err(io(dir))?;
+    }
+    // First what says the bundle is kagebunshin's: one left half written
+    // is finished the next time.
+    crate::atomic::write_private(&plist, text.as_bytes()).map_err(io(&plist))?;
+    let new = inner.with_extension("new");
+    std::fs::copy(app, &new).map_err(io(&new))?;
+    std::fs::rename(&new, &inner).map_err(io(&inner))?;
+    let icon = resources.join("kagebunshin.icns");
+    std::fs::write(&icon, ICNS).map_err(io(&icon))?;
+    if cfg!(target_os = "macos") {
+        // Seals the bundle with the signature its binary already has the
+        // kind of: one that names no developer. Without it the app still
+        // runs; with it macOS knows the folder and the binary as one app.
+        let quiet = |program: &str, args: &[&str]| {
+            let _ = Command::new(program)
+                .args(args)
+                .arg(bundle)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        };
+        quiet("codesign", &["--force", "--sign", "-"]);
+        // Tells the launcher of it now, not when Finder next looks.
+        quiet(
+            "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister",
+            &["-f"],
+        );
+    }
+    Ok(inner)
+}
+
+/// For `setup` on macOS: makes the app found next to this binary or on
+/// `PATH` an app there. None with no app installed; a failure warns.
+pub(super) fn written_bundle() -> Option<File> {
+    let app = super::find_app()?;
+    let written = bundle_path()
+        .map_err(|e| e.message)
+        .and_then(|bundle| write_bundle(&bundle, &app).map(|_| bundle));
+    match written {
+        Ok(path) => Some(File {
+            what: APP,
+            path,
+            reason: None,
+        }),
+        Err(why) => {
+            super::error::warn(&why);
+            None
+        }
+    }
+}
+
+/// Opens the app's window for the daemon on `socket`, as `kagebunshin app`
+/// does, for a first `setup` on macOS: there is no tray for it to wait
+/// in, and the agent's first import waits in the window. A failure warns.
+pub(super) fn opened(socket: &Path) -> bool {
+    let done = units::this_binary().ok().and_then(|cli| {
+        Command::new(cli)
+            .arg("--socket")
+            .arg(socket)
+            .arg("app")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .status()
+            .ok()
+    });
+    let opened = done.is_some_and(|status| status.success());
+    if !opened {
+        super::error::warn("the app did not open; `kagebunshin app` opens it");
+    }
+    opened
+}
+
+/// For `setup` on macOS, where an app that runs is one with its window
+/// open, on the build before this: ends it and opens this build's.
+/// `false` when none runs; a failure warns.
+pub(super) fn reopened(socket: &Path) -> bool {
+    if !answers(socket) {
+        return false;
+    }
+    stop(socket);
+    let deadline = Instant::now() + END;
+    while answers(socket) {
+        if Instant::now() >= deadline {
+            super::error::warn(
+                "the app did not end, so it still runs the build it was started on: quit it, \
+                 then `kagebunshin app`",
+            );
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    opened(socket)
+}
+
+/// On macOS, the binary to start the app from: the one in its bundle, made
+/// or brought up to date from `app` now. Where the bundle cannot be
+/// written, `app` itself, with a warning: the window then has no icon.
+pub(super) fn in_bundle(app: PathBuf) -> PathBuf {
+    if !cfg!(target_os = "macos") {
+        return app;
+    }
+    let written = bundle_path()
+        .map_err(|e| e.message)
+        .and_then(|bundle| write_bundle(&bundle, &app));
+    match written {
+        Ok(inner) => inner,
+        Err(why) => {
+            super::error::warn(&format!(
+                "the app is started from {}, with no icon of its own: {why}",
+                app.display()
+            ));
+            app
+        }
+    }
+}
+
 /// Whether `path` is a file kagebunshin wrote: a regular file, not a
 /// symlink, that carries [`MARK`].
 pub(super) fn managed(path: &Path) -> bool {
@@ -225,10 +438,23 @@ fn refresh(icon: &Path) {
     }
 }
 
-/// Removes those of the three files that are kagebunshin's, and returns
-/// them.
+/// Removes those of the three files that are kagebunshin's, and on macOS
+/// the app's bundle if it is, and returns them.
 fn remove() -> Result<Vec<File>, CliError> {
     let mut files = Vec::new();
+    if cfg!(target_os = "macos") {
+        let bundle = bundle_path()?;
+        if bundle_managed(&bundle) {
+            std::fs::remove_dir_all(&bundle)
+                .map_err(|e| failed(format!("cannot remove {}: {e}", bundle.display())))?;
+            files.push(File {
+                what: APP,
+                path: bundle,
+                reason: None,
+            });
+        }
+        return Ok(files);
+    }
     for (what, path) in paths()? {
         if !managed(&path) {
             continue;
@@ -444,6 +670,23 @@ pub(super) fn started_first(socket: &Path) -> bool {
 
 /// `app install`.
 pub fn install(json: bool, socket: Option<PathBuf>) -> Result<(), CliError> {
+    if cfg!(target_os = "macos") {
+        let app = super::find_app().ok_or_else(super::no_app)?;
+        let bundle = bundle_path()?;
+        write_bundle(&bundle, &app).map_err(failed)?;
+        if json {
+            let file = File {
+                what: APP,
+                path: bundle,
+                reason: None,
+            };
+            return print_json(&serde_json::json!({ "files": [file], "restarted": false }));
+        }
+        return print_line(&format!(
+            "wrote {}: open it from Spotlight or Launchpad, or with `kagebunshin app`",
+            bundle.display()
+        ));
+    }
     if !cfg!(target_os = "linux") {
         return Err(failed(
             "the launcher and login entries are for Linux desktops".into(),
@@ -475,7 +718,11 @@ pub fn uninstall(json: bool) -> Result<(), CliError> {
         return print_json(&serde_json::json!({ "files": files }));
     }
     if files.is_empty() {
-        return print_line("not installed: no launcher or login entry of kagebunshin's");
+        return print_line(if cfg!(target_os = "macos") {
+            "not installed: no Kagebunshin.app of kagebunshin's in ~/Applications"
+        } else {
+            "not installed: no launcher or login entry of kagebunshin's"
+        });
     }
     for f in &files {
         print_line(&format!("removed {}", f.path.display()))?;
@@ -495,6 +742,75 @@ mod tests {
         );
         insta::assert_snapshot!("launcher", entry(cli, socket, false).unwrap());
         insta::assert_snapshot!("login_entry", entry(cli, socket, true).unwrap());
+    }
+
+    /// On macOS the app is a bundle in ~/Applications: the binary, what
+    /// says which app it is, and its icon. It is written once, kept up to
+    /// date with the binary, and never over a bundle that is someone
+    /// else's.
+    #[test]
+    fn the_bundle_is_the_app_as_macos_knows_one() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let app = tmp.path().join("bin/kagebunshin-app");
+        std::fs::create_dir_all(app.parent().unwrap()).unwrap();
+        std::fs::write(&app, "one").unwrap();
+        std::fs::set_permissions(&app, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let bundle = tmp.path().join("Applications/Kagebunshin.app");
+        assert!(!bundle_managed(&bundle));
+
+        let inner = write_bundle(&bundle, &app).unwrap();
+        assert_eq!(inner, bundle.join("Contents/MacOS/kagebunshin-app"));
+        assert_eq!(std::fs::read_to_string(&inner).unwrap(), "one");
+        assert_eq!(
+            inner.metadata().unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+        let plist = std::fs::read_to_string(bundle.join("Contents/Info.plist")).unwrap();
+        for has in [
+            "<string>kagebunshin-app</string>",
+            "<string>io.github.oorestisime.kagebunshin</string>",
+            "<string>kagebunshin</string>",
+            concat!("<string>", env!("CARGO_PKG_VERSION"), "</string>"),
+            MARK,
+        ] {
+            assert!(plist.contains(has), "{has}: {plist}");
+        }
+        let icon = std::fs::read(bundle.join("Contents/Resources/kagebunshin.icns")).unwrap();
+        assert_eq!(&icon[..4], b"icns");
+        assert_eq!(
+            u32::from_be_bytes([icon[4], icon[5], icon[6], icon[7]]) as usize,
+            icon.len()
+        );
+        assert!(bundle_managed(&bundle));
+
+        // As new as the binary: left as it is.
+        std::fs::write(&inner, "kept").unwrap();
+        write_bundle(&bundle, &app).unwrap();
+        assert_eq!(std::fs::read_to_string(&inner).unwrap(), "kept");
+        // An upgrade put a newer binary there: it is copied.
+        std::fs::write(&app, "two").unwrap();
+        let later = std::time::SystemTime::now() + Duration::from_secs(60);
+        std::fs::File::options()
+            .write(true)
+            .open(&app)
+            .unwrap()
+            .set_modified(later)
+            .unwrap();
+        write_bundle(&bundle, &app).unwrap();
+        assert_eq!(std::fs::read_to_string(&inner).unwrap(), "two");
+
+        // Someone else's app of that name, or a file there, is not touched.
+        let other = tmp.path().join("Other/Kagebunshin.app");
+        std::fs::create_dir_all(other.join("Contents")).unwrap();
+        std::fs::write(other.join("Contents/Info.plist"), "<plist/>").unwrap();
+        let e = write_bundle(&other, &app).unwrap_err();
+        assert!(e.ends_with("Kagebunshin.app is not kagebunshin's"), "{e}");
+        assert!(!other.join("Contents/MacOS").exists());
+        assert!(!bundle_managed(&other));
+        let file = tmp.path().join("Kagebunshin.app");
+        std::fs::write(&file, "").unwrap();
+        assert!(write_bundle(&file, &app).is_err());
     }
 
     /// The unit runs the app in the tray, with what the session has of the

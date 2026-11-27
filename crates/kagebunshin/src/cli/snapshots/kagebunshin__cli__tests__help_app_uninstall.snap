@@ -2,7 +2,7 @@
 source: crates/kagebunshin/src/cli/mod.rs
 expression: text
 ---
-Remove the launcher entry, the login entry and the icon
+Remove what `app install` wrote
 
 Usage: kagebunshin app uninstall [OPTIONS]
 

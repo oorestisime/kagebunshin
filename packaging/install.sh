@@ -1,7 +1,7 @@
 #!/bin/sh
 # Installs kagebunshin from a GitHub release, or upgrades it in place.
 #
-#   sh install.sh [--version 0.1.0] [--no-setup]
+#   sh install.sh [--version 0.1.1] [--no-setup]
 #   sh install.sh --uninstall [--purge] [--dry-run]
 #
 # The release is downloaded with curl, or with the GitHub CLI (`gh`) if
@@ -30,7 +30,7 @@ die() {
 while [ $# -gt 0 ]; do
 	case $1 in
 	--version)
-		[ $# -ge 2 ] || die "--version needs a version, e.g. 0.1.0"
+		[ $# -ge 2 ] || die "--version needs a version, e.g. 0.1.1"
 		version=${2#v}
 		shift 2
 		;;

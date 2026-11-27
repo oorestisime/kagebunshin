@@ -323,7 +323,7 @@ waits, not just that key; a person may leave that approval standing for 15 minut
 next run for the same environment then does not wait). Each comes back with an error code, a hint, and
 who can fix it: `agent` when the agent can run the command itself, `human`
 with a `tell`, one sentence for the agent to pass on to you as it is, such
-as "unlock kagebunshin: run `kagebunshin unlock` in a terminal". In text it
+as "unlock kagebunshin: run `kagebunshin unlock` in a terminal, or use Unlock in the app". In text it
 is the line `ask the human: ...`. A refusal that waits for you (locked,
 sensitive, production-looking, not approved) exits 5. A request that
 waited for approval and was not approved says how it ended (a person denied

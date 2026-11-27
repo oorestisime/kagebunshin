@@ -202,6 +202,13 @@ pub fn uninstall(
     for b in BINARIES {
         push("binary", bin_dir.join(b));
     }
+    // The app as macOS has it, if kagebunshin wrote it.
+    if cfg!(target_os = "macos") {
+        let bundle = super::desktop::bundle_path()?;
+        if super::desktop::bundle_managed(&bundle) {
+            push("app", bundle);
+        }
+    }
     // The app's launcher entry, login entry and icon, where kagebunshin
     // wrote them.
     if cfg!(target_os = "linux") {

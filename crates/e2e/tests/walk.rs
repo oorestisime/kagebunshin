@@ -177,6 +177,8 @@ fn the_setup_walk() {
     w.cd("work/blog");
     w.r("kagebunshin next");
     w.cd("work");
+    w.note("outside any checkout it says the same");
+    w.r("kagebunshin next");
     w.h(
         &format!("{PASS}\n{PASS}\n"),
         "kagebunshin setup --no-service",

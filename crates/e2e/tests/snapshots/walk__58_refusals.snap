@@ -20,11 +20,11 @@ locked
 
 $ kagebunshin run -- ./test.sh
 kagebunshin: the daemon is locked
-ask the human: unlock kagebunshin: run `kagebunshin unlock` in a terminal
+ask the human: unlock kagebunshin: run `kagebunshin unlock` in a terminal, or use Unlock in the app
 [exit 5]
 
 $ kagebunshin --json run -- ./test.sh
-{"code":"locked","message":"the daemon is locked","hint":"unlock kagebunshin: run `kagebunshin unlock` in a terminal","who":"human","tell":"unlock kagebunshin: run `kagebunshin unlock` in a terminal"}
+{"code":"locked","message":"the daemon is locked","hint":"unlock kagebunshin: run `kagebunshin unlock` in a terminal, or use Unlock in the app","who":"human","tell":"unlock kagebunshin: run `kagebunshin unlock` in a terminal, or use Unlock in the app"}
 [exit 5]
 
 $ kagebunshin next

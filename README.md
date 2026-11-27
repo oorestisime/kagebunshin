@@ -221,14 +221,15 @@ they need and keeps the values with the original.
 ## Status
 
 > [!NOTE]
-> **Early**; the latest release is v0.1.0. Until 1.0, a new minor version
+> **Early**; the latest release is v0.1.1. Until 1.0, a new minor version
 > (0.2, 0.3) may change a file format or a command; its release notes say
 > what.
 
 There are binaries for Linux x86_64 and aarch64 (glibc 2.35 or later)
 and for macOS arm64. The macOS
-binaries are unsigned, and no one has run them outside CI, which builds
-and tests them: expect rough edges there.
+binaries are not signed by a developer account. One Mac has been set up
+from a release (the service, the app, an import and approvals); it is not
+in daily use there: expect rough edges.
 
 AWS Secrets Manager and the local store are in daily use. Proton Pass
 has handed values from a real vault to a bot on another machine, through

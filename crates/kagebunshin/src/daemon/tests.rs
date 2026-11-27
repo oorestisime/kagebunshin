@@ -260,7 +260,9 @@ async fn starts_locked_and_refuses_values() {
     assert_eq!(w.who, Some(crate::ipc::protocol::Who::Human));
     assert_eq!(
         w.tell.as_deref(),
-        Some("unlock kagebunshin: run `kagebunshin unlock` in a terminal")
+        Some(
+            "unlock kagebunshin: run `kagebunshin unlock` in a terminal, or use Unlock in the app"
+        )
     );
     assert_eq!(fake.fetches(), 0);
 }
@@ -5552,7 +5554,7 @@ async fn a_locked_or_disabled_daemon_refuses_remote_machines() {
         assert_eq!(e.code, ErrorCode::Locked);
         // Unlocking is done here, not where the caller is.
         let there = "on the daemon's machine, unlock kagebunshin: run `kagebunshin unlock` in a \
-                     terminal";
+                     terminal, or use Unlock in the app";
         assert_eq!(
             (e.hint.as_deref(), e.tell.as_deref()),
             (Some(there), Some(there))

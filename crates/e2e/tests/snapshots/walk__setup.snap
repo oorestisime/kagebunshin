@@ -10,6 +10,14 @@ waiting on the human; tell them:
   - Please run `kagebunshin setup` in a terminal; it creates the local store, asking for its new passphrase, and starts and unlocks the daemon.
 nothing more you can do until the human has done the above
 
+-- outside any checkout it says the same
+
+$ kagebunshin next
+kagebunshin is not set up on this machine
+waiting on the human; tell them:
+  - Please run `kagebunshin setup` in a terminal; it creates the local store, asking for its new passphrase, and starts and unlocks the daemon.
+nothing more you can do until the human has done the above
+
 (human) $ kagebunshin setup --no-service
 New passphrase for the local store: 
 Confirm: 
