@@ -8,7 +8,7 @@ x86_64 build is in daily use, and the macOS one is unsigned.
 ```sh
 curl -fsSLO https://raw.githubusercontent.com/oorestisime/kagebunshin/main/packaging/install.sh
 sh install.sh                          # the newest release
-sh install.sh --version 0.0.1-alpha.19  # or a given one
+sh install.sh --version 0.1.0           # or a given one
 ```
 
 It downloads the release tarball (the CLI and the app) with curl, or with
@@ -18,6 +18,12 @@ for OpenCode and Claude Code when it finds them, then runs `kagebunshin setup`,
 which asks for the store passphrase and, on Linux, adds the app to the
 launcher, starts it in the tray and has it start there at login. Run it
 again to upgrade in place; `--no-setup` stops after installing.
+
+Versions are `0.MINOR.PATCH` until 1.0. A new minor version may change the
+store's format, the config or project files, or a command; its release
+notes say what, and a patch changes none of them. The CLI and the daemon
+must be the same build, so an upgrade restarts the daemon, locked, and a
+machine that reaches this one over the tailnet is upgraded with it.
 
 `kagebunshin uninstall` removes the service, the skills, the hooks, the
 app's launcher and login entries and the binaries,
