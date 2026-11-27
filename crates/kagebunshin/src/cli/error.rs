@@ -195,10 +195,17 @@ pub fn start_daemon_hint() -> String {
     )
 }
 
-/// What to do about a daemon that does not answer: on a machine with no
-/// `store`, nothing is set up yet, and `setup` does all of it.
-fn not_running_hint(store: bool) -> String {
-    if store {
+/// What to do about a daemon that does not answer. On a machine with no
+/// `store`, nothing is set up yet, and `setup` does all of it. Where its
+/// service is `installed`, `setup` starts it again and unlocks it, whether
+/// it stopped or was never loaded. With a store and no service it is one
+/// started by hand.
+fn not_running_hint(store: bool, installed: bool) -> String {
+    if store && installed {
+        "the daemon's service is installed and not running: run `kagebunshin setup` in a \
+         terminal; it starts the daemon again, asking for the store passphrase, and unlocks it"
+            .into()
+    } else if store {
         start_daemon_hint()
     } else {
         "kagebunshin is not set up on this machine: run `kagebunshin setup` in a terminal; it \
@@ -223,9 +230,11 @@ impl From<ClientError> for CliError {
             ClientError::NotRunning { .. } => {
                 let store =
                     crate::config::ConfigDir::from_env().is_ok_and(|d| d.store_file().exists());
+                let installed = super::units::unit_path().is_ok_and(|p| p.exists());
+                let hint = not_running_hint(store, installed);
                 CliError::new(Exit::DaemonNotRunning, "daemon_not_running", message)
-                    .with_hint(not_running_hint(store))
-                    .human(not_running_hint(store))
+                    .with_hint(hint.clone())
+                    .human(hint)
             }
             ClientError::InsecureDir(_) | ClientError::ForeignDaemon { .. } => {
                 CliError::new(Exit::Refused, "insecure_socket", message)
@@ -273,6 +282,15 @@ impl From<ClientError> for CliError {
                     ErrorCode::Store => (Exit::Failure, "store"),
                     ErrorCode::NoKey => (Exit::Failure, "no_key"),
                 };
+                // A daemon on this machine that runs another build, as one
+                // does between an upgrade and `setup`. Daemons before this
+                // one said to restart it, and not how.
+                let other_machine = w.hint.as_deref() == Some(crate::ipc::remote::SAME_RELEASE);
+                if w.code == ErrorCode::BuildMismatch && w.who.is_none() && !other_machine {
+                    return CliError::new(exit, code, w.message)
+                        .with_hint(crate::ipc::server::SAME_BUILD)
+                        .human(crate::ipc::server::SAME_BUILD);
+                }
                 CliError {
                     exit,
                     code,
@@ -368,16 +386,48 @@ mod tests {
         assert_eq!((e.exit, e.who), (Exit::DaemonNotRunning, Some(Who::Human)));
         assert_eq!(e.hint, e.tell);
 
-        let hint = not_running_hint(true);
+        // A store and no service: a daemon started by hand.
+        let hint = not_running_hint(true, false);
         #[cfg(target_os = "linux")]
         assert!(hint.contains("systemctl --user"), "{hint}");
         #[cfg(target_os = "macos")]
         assert!(hint.contains("launchctl"), "{hint}");
-        let hint = not_running_hint(false);
+        // No store, or a service that is not running: `setup`.
+        for hint in [not_running_hint(false, false), not_running_hint(true, true)] {
+            assert!(
+                hint.contains("run `kagebunshin setup` in a terminal"),
+                "{hint}"
+            );
+            assert!(!hint.contains("daemon install"), "{hint}");
+        }
+        assert!(not_running_hint(true, true).contains("is installed and not running"));
+    }
+
+    /// A daemon of another build says so; what to do about it on this
+    /// machine is `setup`, whatever that daemon said, and on another
+    /// machine what that one says.
+    #[test]
+    fn a_build_mismatch_is_fixed_with_setup() {
+        let mismatch = |hint: &str| {
+            let wire = crate::ipc::protocol::WireError::new(
+                ErrorCode::BuildMismatch,
+                "client build a does not match b",
+            )
+            .with_hint(hint);
+            CliError::from(ClientError::Daemon(wire))
+        };
+        let e = mismatch("restart the daemon so the CLI and daemon run the same build");
+        assert_eq!((e.exit, e.who), (Exit::BuildMismatch, Some(Who::Human)));
+        let tell = e.tell.unwrap();
         assert!(
-            hint.contains("run `kagebunshin setup` in a terminal"),
-            "{hint}"
+            tell.contains("run `kagebunshin setup` in a terminal"),
+            "{tell}"
         );
-        assert!(!hint.contains("daemon install"), "{hint}");
+        assert_eq!(e.hint.as_deref(), Some(tell.as_str()));
+        let e = mismatch(crate::ipc::remote::SAME_RELEASE);
+        assert_eq!(
+            (e.who, e.hint.as_deref()),
+            (None, Some(crate::ipc::remote::SAME_RELEASE))
+        );
     }
 }

@@ -1,7 +1,7 @@
 #!/bin/sh
 # Installs kagebunshin from a GitHub release, or upgrades it in place.
 #
-#   sh install.sh [--version 0.1.1] [--no-setup]
+#   sh install.sh [--version 0.1.2] [--no-setup]
 #   sh install.sh --uninstall [--purge] [--dry-run]
 #
 # The release is downloaded with curl, or with the GitHub CLI (`gh`) if
@@ -30,7 +30,7 @@ die() {
 while [ $# -gt 0 ]; do
 	case $1 in
 	--version)
-		[ $# -ge 2 ] || die "--version needs a version, e.g. 0.1.1"
+		[ $# -ge 2 ] || die "--version needs a version, e.g. 0.1.2"
 		version=${2#v}
 		shift 2
 		;;
@@ -192,6 +192,9 @@ if [ -n "$setup" ]; then
 	# service on this binary and unlocks it, and on Linux puts the app in
 	# the launcher and at login, and in the tray on a first install.
 	"$kb" setup
+elif [ -e "${KAGEBUNSHIN_CONFIG_DIR:-$config_home/kagebunshin}/store.age" ]; then
+	# An upgrade: what runs is still the build before this one.
+	echo "next: run \`$kb setup\`: it restarts the daemon and the app on this build. Until then this CLI refuses the daemon that runs"
 else
 	echo "next: run \`$kb setup\`, then \`$kb onboard DIR…\` with the folders of your projects"
 fi

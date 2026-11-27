@@ -221,7 +221,7 @@ they need and keeps the values with the original.
 ## Status
 
 > [!NOTE]
-> **Early**; the latest release is v0.1.1. Until 1.0, a new minor version
+> **Early**; the latest release is v0.1.2. Until 1.0, a new minor version
 > (0.2, 0.3) may change a file format or a command; its release notes say
 > what.
 

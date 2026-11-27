@@ -179,7 +179,11 @@ fn mismatched_build_is_refused_and_closed() {
     };
     assert_eq!(e.code, ErrorCode::BuildMismatch);
     assert!(e.message.contains("0.0.0-other") && e.message.contains(BUILD_ID));
-    assert!(e.hint.unwrap().contains("restart the daemon"));
+    assert!(
+        e.hint
+            .unwrap()
+            .contains("it restarts the daemon on this build")
+    );
     assert!(matches!(
         read_frame::<_, ResponseFrame>(&mut s),
         Err(FrameError::Closed)

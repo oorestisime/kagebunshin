@@ -33,6 +33,12 @@ use super::protocol::{
 use crate::daemon::Daemon;
 use crate::sys::{self, PeerCred};
 
+/// What a caller of another build on this machine is told to do: `setup`
+/// restarts the daemon on the build it is run from.
+pub const SAME_BUILD: &str = "the CLI and the daemon are different builds, as after an upgrade: \
+     run `kagebunshin setup` in a terminal; it restarts the daemon on this build, asking for the \
+     store passphrase, and unlocks it";
+
 pub struct ServerConfig {
     pub socket_path: PathBuf,
     pub build_id: String,
@@ -300,7 +306,8 @@ where
                     cfg.build_id
                 ),
             )
-            .with_hint("restart the daemon so the CLI and daemon run the same build");
+            .with_hint(SAME_BUILD)
+            .human(SAME_BUILD);
             return reply(wr, cfg, first.id, Response::Error(err)).await;
         }
         _ => {

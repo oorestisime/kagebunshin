@@ -264,6 +264,12 @@ pub(super) fn manage<S: AsRef<std::ffi::OsStr>>(program: &str, args: &[S]) -> Re
         return Ok(());
     }
     let err = String::from_utf8_lossy(&out.stderr);
+    // launchctl's advice for every failure, and wrong for a user's own
+    // service, which root cannot load.
+    let err: Vec<&str> = (err.lines())
+        .filter(|l| !l.starts_with("Try re-running the command as root"))
+        .collect();
+    let err = err.join("\n");
     let args: Vec<_> = (args.iter())
         .map(|a| a.as_ref().to_string_lossy())
         .collect();
@@ -330,7 +336,11 @@ pub fn write_unit(socket_arg: Option<PathBuf>, start: bool) -> Result<Installed,
         .map_err(|e| failed(format!("cannot write {}: {e}", path.display())))?;
     if start {
         load(&path).map_err(|e| {
-            failed(e).with_hint(format!("{} is written; load it by hand", path.display()))
+            failed(e).with_hint(format!(
+                "{} is written, but the service manager did not start it: run this command \
+                 again",
+                path.display()
+            ))
         })?;
     }
     Ok(Installed {
@@ -352,10 +362,48 @@ fn load(path: &Path) -> Result<(), String> {
     }
     #[cfg(target_os = "macos")]
     {
-        // Not loaded is fine.
-        let _ = manage("launchctl", &["bootout", &format!("{}/{LABEL}", domain())]);
         let plist = path.to_str().ok_or("the plist path is not UTF-8")?;
-        manage("launchctl", &["bootstrap", &domain(), plist])
+        reload(
+            |args| manage("launchctl", args),
+            std::thread::sleep,
+            &domain(),
+            plist,
+        )
+    }
+}
+
+/// Has launchd run the service of `plist` in `domain`, in place of one it
+/// runs now. `bootout` returns while the old one is still ending, and a
+/// `bootstrap` then fails (5, input/output error) and leaves no service
+/// at all: so the old one is waited for, until `print` no longer finds
+/// it, and the bootstrap is tried again while it fails.
+#[cfg(any(test, target_os = "macos"))]
+fn reload(
+    mut launchctl: impl FnMut(&[&str]) -> Result<(), String>,
+    mut wait: impl FnMut(std::time::Duration),
+    domain: &str,
+    plist: &str,
+) -> Result<(), String> {
+    use std::time::Duration;
+    let service = format!("{domain}/{LABEL}");
+    // Not loaded is fine.
+    let _ = launchctl(&["bootout", &service]);
+    for _ in 0..50 {
+        if launchctl(&["print", &service]).is_err() {
+            break;
+        }
+        wait(Duration::from_millis(100));
+    }
+    let mut again = 5;
+    loop {
+        match launchctl(&["bootstrap", domain, plist]) {
+            Ok(()) => return Ok(()),
+            Err(e) if again == 0 => return Err(e),
+            Err(_) => {
+                again -= 1;
+                wait(Duration::from_millis(500));
+            }
+        }
     }
 }
 
@@ -452,6 +500,67 @@ pub fn status(json: bool, socket_arg: Option<PathBuf>) -> Result<(), CliError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// launchd is given the new service only once the old one is gone,
+    /// and again if it still refuses: an upgrade replaces a daemon that
+    /// runs, and must not end with none.
+    #[test]
+    fn a_running_service_is_waited_for_before_the_new_one_is_loaded() {
+        let run = |print_finds: usize, bootstrap_fails: usize| {
+            let (mut prints, mut failures) = (print_finds, bootstrap_fails);
+            let calls = std::cell::RefCell::new(Vec::new());
+            let waited = std::cell::Cell::new(std::time::Duration::ZERO);
+            let done = reload(
+                |args| {
+                    calls.borrow_mut().push(args.join(" "));
+                    match args[0] {
+                        "print" if prints > 0 => {
+                            prints -= 1;
+                            Ok(())
+                        }
+                        "print" => Err("Could not find service".into()),
+                        "bootstrap" if failures > 0 => {
+                            failures -= 1;
+                            Err("Bootstrap failed: 5: Input/output error".into())
+                        }
+                        _ => Ok(()),
+                    }
+                },
+                |d| waited.set(waited.get() + d),
+                "gui/501",
+                "/h/a.plist",
+            );
+            (done, calls.into_inner(), waited.get())
+        };
+        let service = format!("gui/501/{LABEL}");
+        let (bootout, print) = (format!("bootout {service}"), format!("print {service}"));
+        let (bootout, print, bootstrap) = (
+            bootout.as_str(),
+            print.as_str(),
+            "bootstrap gui/501 /h/a.plist",
+        );
+
+        // Nothing was loaded: no waiting.
+        let (done, calls, waited) = run(0, 0);
+        assert_eq!(done, Ok(()));
+        assert_eq!(calls, [bootout, print, bootstrap]);
+        assert_eq!(waited, std::time::Duration::ZERO);
+
+        // The old one takes a moment to go, and the first load still fails.
+        let (done, calls, waited) = run(2, 1);
+        assert_eq!(done, Ok(()));
+        assert_eq!(calls, [bootout, print, print, print, bootstrap, bootstrap]);
+        assert_eq!(waited, std::time::Duration::from_millis(700));
+
+        // A load that keeps failing is given up on, with what launchd said.
+        let (done, calls, _) = run(0, 99);
+        assert_eq!(done, Err("Bootstrap failed: 5: Input/output error".into()));
+        assert_eq!(calls.iter().filter(|c| *c == bootstrap).count(), 6);
+        // One that never goes is not waited for without end.
+        let (done, calls, _) = run(999, 0);
+        assert_eq!(done, Ok(()));
+        assert_eq!(calls.iter().filter(|c| *c == print).count(), 50);
+    }
 
     #[test]
     fn systemd_unit_golden() {
