@@ -18,10 +18,11 @@ Release work still open:
   the machine that asked, and no token. `pass-cli` shows a token's expiry
   only in human-readable output, so `connect proton --expires` is typed
   by hand until it has a machine-readable form.
-- macOS: use it daily. One Mac was set up from the 0.1.0 release: the
-  launchd service, the app, an import and approvals worked there. The
-  approval page, the providers and the remote endpoint are untried on
-  a Mac, and so is the app as `Kagebunshin.app`, which came after.
+- macOS: use it daily. One Mac was set up from the 0.1.0 release and
+  upgraded to 0.1.1: the launchd service, the app as `Kagebunshin.app`,
+  an import and approvals worked there. The approval page, the providers
+  and the remote endpoint are untried on a Mac. The app has no icon in
+  the menu bar, so a request waits only while its window is open.
 - A Homebrew tap from `packaging/homebrew/kagebunshin.rb`; `cargo
   install` from crates.io, which `publish = false` blocks today. The
   macOS builds stay unsigned: the install script needs no signature.

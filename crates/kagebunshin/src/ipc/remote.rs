@@ -70,6 +70,9 @@ pub const POLL: Duration = Duration::from_secs(5);
 /// The path requests are posted to.
 pub const PATH: &str = "/v1";
 
+/// What a caller of another build is told to do.
+pub const SAME_RELEASE: &str = "install the same kagebunshin release on both machines";
+
 /// The request header that carries the caller's build, which must be the
 /// daemon's.
 pub const BUILD_HEADER: &str = "kagebunshin-build";
@@ -433,7 +436,7 @@ fn same_build(headers: &HeaderMap, cfg: &ServerConfig) -> Result<(), WireError> 
             cfg.build_id
         ),
     )
-    .with_hint("install the same kagebunshin release on both machines"))
+    .with_hint(SAME_RELEASE))
 }
 
 /// The hash of the token in `Authorization: Bearer <token>`; `None` for a

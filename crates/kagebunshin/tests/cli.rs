@@ -133,17 +133,22 @@ fn daemon_not_running() {
     );
     assert!(!err.contains("daemon install"), "{err}");
 
-    // With one, it is the daemon that is to start.
-    let config = tmp.path().join("config");
+    // With one and no service, it is a daemon someone starts by hand.
+    let (config, home) = (tmp.path().join("config"), tmp.path().join("home"));
     fs::create_dir(&config).unwrap();
     fs::write(config.join(kagebunshin::store::STORE_FILE), "").unwrap();
-    let o = Command::new(env!("CARGO_BIN_EXE_kagebunshin"))
-        .args(["daemon", "ping", "--socket", sock(&socket)])
-        .env_remove("KAGEBUNSHIN_SOCKET")
-        .env("KAGEBUNSHIN_CONFIG_DIR", &config)
-        .env("XDG_STATE_HOME", "/nonexistent/kagebunshin-test-state")
-        .output()
-        .unwrap();
+    let ping = || {
+        Command::new(env!("CARGO_BIN_EXE_kagebunshin"))
+            .args(["daemon", "ping", "--socket", sock(&socket)])
+            .env_remove("KAGEBUNSHIN_SOCKET")
+            .env_remove("XDG_CONFIG_HOME")
+            .env("HOME", &home)
+            .env("KAGEBUNSHIN_CONFIG_DIR", &config)
+            .env("XDG_STATE_HOME", "/nonexistent/kagebunshin-test-state")
+            .output()
+            .unwrap()
+    };
+    let o = ping();
     assert_eq!(code(&o), 3);
     let err = stderr(&o);
     assert!(
@@ -157,6 +162,24 @@ fn daemon_not_running() {
     );
     #[cfg(target_os = "macos")]
     assert!(err.contains("`launchctl kickstart"), "{err}");
+
+    // With its service installed, `setup` starts it again: whether it
+    // stopped or was never loaded, that one command does.
+    #[cfg(target_os = "linux")]
+    let unit = home.join(".config/systemd/user/kagebunshin.service");
+    #[cfg(target_os = "macos")]
+    let unit = home.join("Library/LaunchAgents/io.github.oorestisime.kagebunshin.plist");
+    fs::create_dir_all(unit.parent().unwrap()).unwrap();
+    fs::write(&unit, "").unwrap();
+    let err = stderr(&ping());
+    assert!(
+        err.contains(
+            "ask the human: the daemon's service is installed and not running: run \
+             `kagebunshin setup` in a terminal"
+        ),
+        "{err}"
+    );
+    assert!(!err.contains("daemon install"), "{err}");
 
     let o = kb(&["daemon", "ping", "--json", "--socket", sock(&socket)]);
     assert_eq!(code(&o), 3);
@@ -176,7 +199,8 @@ fn build_mismatch_exits_4() {
     assert_eq!(code(&o), 4);
     let e = json_error(&o);
     assert_eq!(e["code"], "build_mismatch");
-    assert!(e["hint"].as_str().unwrap().contains("restart the daemon"));
+    assert!(e["hint"].as_str().unwrap().contains("`kagebunshin setup`"));
+    assert_eq!(e["who"], "human");
 }
 
 #[test]

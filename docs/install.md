@@ -11,7 +11,7 @@ in System Settings.
 ```sh
 curl -fsSLO https://raw.githubusercontent.com/oorestisime/kagebunshin/main/packaging/install.sh
 sh install.sh                          # the newest release
-sh install.sh --version 0.1.1           # or a given one
+sh install.sh --version 0.1.2           # or a given one
 ```
 
 It downloads the release tarball (the CLI and the app) with curl, or with
@@ -20,8 +20,10 @@ SHA-256, installs both to `~/.local/bin`, installs the agent skill and hooks
 for OpenCode and Claude Code when it finds them, then runs `kagebunshin setup`,
 which asks for the store passphrase and, on Linux, adds the app to the
 launcher, starts it in the tray and has it start there at login. On macOS
-it makes the app `Kagebunshin.app` in `~/Applications`, so Spotlight and
-Launchpad find it, and the first time opens its window. Run it
+it makes the app `Kagebunshin.app` in `/Applications` (in `~/Applications`
+if you may not write there), so Finder, Spotlight and Launchpad find it,
+and the first time opens its window. An upgrade restarts the daemon and
+an app that was open. Run it
 again to upgrade in place; `--no-setup` stops after installing.
 
 Versions are `0.MINOR.PATCH` until 1.0. A new minor version may change the

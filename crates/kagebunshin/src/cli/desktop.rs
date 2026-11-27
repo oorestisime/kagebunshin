@@ -1,6 +1,7 @@
 //! `app install|uninstall`: puts the app in the desktop's launcher and
 //! starts it in the tray at login, on Linux; on macOS, makes it an app
-//! there, `~/Applications/Kagebunshin.app` ([`write_bundle`]).
+//! there, `Kagebunshin.app` in `/Applications` or `~/Applications`
+//! ([`write_bundle`]).
 //!
 //! Three files, each named for the app id its windows carry: a launcher
 //! entry, a login entry that starts the app with `--hidden`, and the icon
@@ -173,14 +174,47 @@ Exec={exec} --quit
     })
 }
 
-/// Where the app's bundle goes on macOS: the user's own Applications
-/// folder, which needs no administrator and is searched like the system's.
-pub(super) fn bundle_path() -> Result<PathBuf, CliError> {
-    std::env::var_os("HOME")
+/// Where the app's bundle may be on macOS, in the order it is tried:
+/// `/Applications`, where a Mac's apps are looked for and which an
+/// administrator may write to, then the user's own `~/Applications`, which
+/// needs no rights and is searched like the other.
+pub(super) fn bundle_places() -> Result<[PathBuf; 2], CliError> {
+    let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
-        .map(|home| home.join("Applications").join(BUNDLE))
-        .ok_or_else(|| failed("HOME is not set to an absolute path".into()))
+        .ok_or_else(|| failed("HOME is not set to an absolute path".into()))?;
+    Ok([
+        Path::new("/Applications").join(BUNDLE),
+        home.join("Applications").join(BUNDLE),
+    ])
+}
+
+/// The bundles kagebunshin wrote, of those places.
+pub(super) fn bundles() -> Result<Vec<PathBuf>, CliError> {
+    let places = bundle_places()?;
+    Ok(places.into_iter().filter(|b| bundle_managed(b)).collect())
+}
+
+/// Makes `app` an app in the first of `places` that takes it, and removes
+/// kagebunshin's from the others: one app, not two. Returns the bundle and
+/// the binary in it. A place that refuses, as `/Applications` does someone
+/// who is no administrator, is passed over.
+fn place_bundle(places: &[PathBuf], app: &Path) -> Result<(PathBuf, PathBuf), String> {
+    let mut refused = String::from("there is nowhere to put the app");
+    for bundle in places {
+        match write_bundle(bundle, app) {
+            Ok(inner) => {
+                for other in places.iter().filter(|o| *o != bundle) {
+                    if bundle_managed(other) {
+                        let _ = std::fs::remove_dir_all(other);
+                    }
+                }
+                return Ok((bundle.clone(), inner));
+            }
+            Err(why) => refused = why,
+        }
+    }
+    Err(refused)
 }
 
 /// The bundle's `Info.plist`: what macOS reads of an app before it runs.
@@ -298,11 +332,11 @@ pub(super) fn write_bundle(bundle: &Path, app: &Path) -> Result<PathBuf, String>
 /// `PATH` an app there. None with no app installed; a failure warns.
 pub(super) fn written_bundle() -> Option<File> {
     let app = super::find_app()?;
-    let written = bundle_path()
+    let written = bundle_places()
         .map_err(|e| e.message)
-        .and_then(|bundle| write_bundle(&bundle, &app).map(|_| bundle));
+        .and_then(|places| place_bundle(&places, &app));
     match written {
-        Ok(path) => Some(File {
+        Ok((path, _)) => Some(File {
             what: APP,
             path,
             reason: None,
@@ -335,14 +369,13 @@ pub(super) fn opened(socket: &Path) -> bool {
     opened
 }
 
-/// For `setup` on macOS, where an app that runs is one with its window
-/// open, on the build before this: ends it and opens this build's.
-/// `false` when none runs; a failure warns.
+/// For `setup` on macOS, where an app that ran before it had its window
+/// open, on the build before this: ends it if it still runs, and opens
+/// this build's. A failure warns.
 pub(super) fn reopened(socket: &Path) -> bool {
-    if !answers(socket) {
-        return false;
+    if answers(socket) {
+        stop(socket);
     }
-    stop(socket);
     let deadline = Instant::now() + END;
     while answers(socket) {
         if Instant::now() >= deadline {
@@ -364,11 +397,11 @@ pub(super) fn in_bundle(app: PathBuf) -> PathBuf {
     if !cfg!(target_os = "macos") {
         return app;
     }
-    let written = bundle_path()
+    let written = bundle_places()
         .map_err(|e| e.message)
-        .and_then(|bundle| write_bundle(&bundle, &app));
+        .and_then(|places| place_bundle(&places, &app));
     match written {
-        Ok(inner) => inner,
+        Ok((_, inner)) => inner,
         Err(why) => {
             super::error::warn(&format!(
                 "the app is started from {}, with no icon of its own: {why}",
@@ -444,8 +477,7 @@ fn refresh(icon: &Path) {
 fn remove() -> Result<Vec<File>, CliError> {
     let mut files = Vec::new();
     if cfg!(target_os = "macos") {
-        let bundle = bundle_path()?;
-        if bundle_managed(&bundle) {
+        for bundle in bundles()? {
             std::fs::remove_dir_all(&bundle)
                 .map_err(|e| failed(format!("cannot remove {}: {e}", bundle.display())))?;
             files.push(File {
@@ -673,8 +705,7 @@ pub(super) fn started_first(socket: &Path) -> bool {
 pub fn install(json: bool, socket: Option<PathBuf>) -> Result<(), CliError> {
     if cfg!(target_os = "macos") {
         let app = super::find_app().ok_or_else(super::no_app)?;
-        let bundle = bundle_path()?;
-        write_bundle(&bundle, &app).map_err(failed)?;
+        let (bundle, _) = place_bundle(&bundle_places()?, &app).map_err(failed)?;
         if json {
             let file = File {
                 what: APP,
@@ -720,7 +751,7 @@ pub fn uninstall(json: bool) -> Result<(), CliError> {
     }
     if files.is_empty() {
         return print_line(if cfg!(target_os = "macos") {
-            "not installed: no Kagebunshin.app of kagebunshin's in ~/Applications"
+            "not installed: no Kagebunshin.app of kagebunshin's in /Applications or ~/Applications"
         } else {
             "not installed: no launcher or login entry of kagebunshin's"
         });
@@ -745,7 +776,13 @@ mod tests {
         insta::assert_snapshot!("login_entry", entry(cli, socket, true).unwrap());
     }
 
-    /// On macOS the app is a bundle in ~/Applications: the binary, what
+    /// A path under a plain file: nothing can be made there.
+    fn file_at(path: &Path) -> PathBuf {
+        std::fs::write(path, "").unwrap();
+        path.to_owned()
+    }
+
+    /// On macOS the app is a bundle among the Applications: the binary, what
     /// says which app it is, and its icon. It is written once, kept up to
     /// date with the binary, and never over a bundle that is someone
     /// else's.
@@ -800,6 +837,23 @@ mod tests {
             .unwrap();
         write_bundle(&bundle, &app).unwrap();
         assert_eq!(std::fs::read_to_string(&inner).unwrap(), "two");
+
+        // It goes in the first place that takes it, and kagebunshin's
+        // is taken out of the others: here the first is under a file.
+        let user = tmp.path().join("home/Applications/Kagebunshin.app");
+        let nowhere = file_at(&tmp.path().join("plain")).join("Kagebunshin.app");
+        let (at, binary) = place_bundle(&[nowhere.clone(), user.clone()], &app).unwrap();
+        assert_eq!(
+            (&at, &binary),
+            (&user, &user.join("Contents/MacOS/kagebunshin-app"))
+        );
+        // Later the first one takes it: the app moves there.
+        let system = tmp.path().join("system/Kagebunshin.app");
+        let (at, _) = place_bundle(&[system.clone(), user.clone()], &app).unwrap();
+        assert_eq!(at, system);
+        assert!(bundle_managed(&system) && !user.exists());
+        let e = place_bundle(std::slice::from_ref(&nowhere), &app).unwrap_err();
+        assert!(e.starts_with("cannot write "), "{e}");
 
         // Someone else's app of that name, or a file there, is not touched.
         let other = tmp.path().join("Other/Kagebunshin.app");

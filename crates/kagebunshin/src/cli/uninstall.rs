@@ -204,8 +204,7 @@ pub fn uninstall(
     }
     // The app as macOS has it, if kagebunshin wrote it.
     if cfg!(target_os = "macos") {
-        let bundle = super::desktop::bundle_path()?;
-        if super::desktop::bundle_managed(&bundle) {
+        for bundle in super::desktop::bundles()? {
             push("app", bundle);
         }
     }

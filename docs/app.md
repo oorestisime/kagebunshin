@@ -80,11 +80,15 @@ it in the tray (`kagebunshin app install` writes only the entries, and
 `kagebunshin app uninstall` removes them). Where there is no tray (macOS,
 or a desktop with no tray host), closing the window ends the app.
 
-On macOS the app is `Kagebunshin.app` in `~/Applications`: `setup` and
+On macOS the app is `Kagebunshin.app` in `/Applications`, or in
+`~/Applications` for someone who may not write there: `setup` and
 `kagebunshin app` write it from the installed binary and keep it up to
-date, so it also opens from Spotlight, Launchpad and the Dock. Its first
-`setup` opens the window. It is not signed by a developer account, which
-only matters for a copy a browser downloaded.
+date, so it also opens from Finder, Spotlight, Launchpad and the Dock. Its
+first `setup` opens the window, and a later one opens it again if it was
+open. A request that waits is announced with a notification of the app's
+own, which macOS asks you to allow the first time; clicking it shows the
+window. It is not signed by a developer account, which only matters for a
+copy a browser downloaded.
 
 `kagebunshin app` returns to the prompt once the app is up. Where the
 daemon is a systemd user service the app is one too,

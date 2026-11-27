@@ -211,8 +211,9 @@ pub enum Command {
     /// store passphrase.
     ///
     /// On macOS there is no tray: closing the window ends the app. The app
-    /// is also `Kagebunshin.app` in ~/Applications, which this writes and
-    /// keeps up to date, so it opens from Spotlight and Launchpad too.
+    /// is also `Kagebunshin.app` in /Applications (in ~/Applications for
+    /// someone who may not write there), which this writes and keeps up to
+    /// date, so it opens from Spotlight and Launchpad too.
     ///
     /// Where the daemon is a systemd user service, the app is one beside
     /// it, `kagebunshin-app.service`: restarted if it fails, and
@@ -499,13 +500,14 @@ pub enum MarkAction {
 
 #[derive(Debug, Subcommand)]
 pub enum AppAction {
-    /// Add the app to the launcher and to login (Linux), or to ~/Applications (macOS)
+    /// Add the app to the launcher and to login (Linux), or to the Applications (macOS)
     ///
     /// On Linux, writes a launcher entry, a login entry that starts the
     /// app with --hidden, and its icon. Both entries run this binary's
     /// `app` on the socket this command resolves. An app that is running
     /// is restarted, on the binary found now. On macOS, writes
-    /// `Kagebunshin.app` in ~/Applications. `setup` does this too. A file
+    /// `Kagebunshin.app` in /Applications, or in ~/Applications for someone
+    /// who may not write there. `setup` does this too. A file
     /// of the same name that kagebunshin did not write is left alone.
     Install,
     /// Remove what `app install` wrote
@@ -1503,6 +1505,10 @@ fn setup(socket: Option<PathBuf>, json: bool, no_service: bool) -> Result<(), Cl
             .map_err(store_error)?;
         p
     };
+    // Asked before the daemon is restarted: an app may end with the one
+    // it was talking to.
+    let app_was_open = cfg!(target_os = "macos")
+        && units::socket(socket.clone()).is_ok_and(|s| desktop::answers(&s));
     let unit = if no_service {
         None
     } else {
@@ -1556,13 +1562,13 @@ fn setup(socket: Option<PathBuf>, json: bool, no_service: bool) -> Result<(), Cl
             }
         }
     } else if unit.is_some() && cfg!(target_os = "macos") {
-        // There the app is one of ~/Applications, and has no tray to wait
+        // There the app is one of the Applications, and has no tray to wait
         // in: the setup that made the store opens its window, and a later
         // one opens this build's in place of one that is open.
         match desktop::written_bundle() {
             Some(app) => {
                 let socket = units::socket(socket)?;
-                let restarted = desktop::reopened(&socket);
+                let restarted = app_was_open && desktop::reopened(&socket);
                 let started = !restarted && !existed && desktop::opened(&socket);
                 (vec![app], restarted, started)
             }
@@ -1671,11 +1677,21 @@ pub(super) fn prompt(label: &str) -> Result<WireSecret, CliError> {
                 ),
             )
             .with_hint("it is the human's to run, in a terminal of their own")
-            .human(
-                "run that command yourself, in a terminal: it asks for the store passphrase, \
-                 which only you have",
-            )
+            .human(format!(
+                "run `{}` yourself, in a terminal: it asks for the store passphrase, which only \
+                 you have",
+                this_command()
+            ))
         })
+}
+
+/// This command as it would be typed, for a sentence that hands it to a
+/// person: `--json` is the caller's, not theirs.
+fn this_command() -> String {
+    std::iter::once("kagebunshin".to_owned())
+        .chain(std::env::args().skip(1).filter(|a| a != "--json"))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// A new passphrase, typed twice. Empty is refused here rather than after a

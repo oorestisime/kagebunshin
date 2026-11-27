@@ -160,8 +160,8 @@ struct App {
     /// Whether the request asked about shows how it got here, why it
     /// waits and what approving does.
     approval_details: bool,
-    /// What the app in the tray reaches outside its window; none in
-    /// scenes, tests and headless runs, nor where there is no tray.
+    /// What the app that runs reaches outside its window; none in scenes,
+    /// tests and headless runs.
     desk: Option<Box<dyn Desk>>,
     /// The address a phone opens to be paired and its QR code, drawn once
     /// for each pairing.
@@ -177,7 +177,8 @@ trait Desk {
     fn at_once(&self, f: fn(&mut App, &mut Tx) -> bool) -> Waker;
 }
 
-/// The window of the process that stays in the tray.
+/// The window of the process that stays: in the tray, or where there is
+/// none, for as long as its window is open.
 struct Resident(rune::AppHandle<App>);
 
 impl Desk for Resident {
@@ -7358,6 +7359,12 @@ fn resident(spec: AppSpec<App>) -> Result<(), String> {
         let handle = handle.clone();
         move || handle.quit()
     };
+    // A click on a notification of the app's shows its window: on macOS,
+    // where the app posts them itself.
+    rune_notify::on_click({
+        let show = show.clone();
+        move |_| show(None)
+    });
     let tray = shell::tray(show.clone(), quit.clone());
     let left = instance.as_ref().map(shell::Instance::socket);
     if let Some(instance) = instance {
@@ -7375,9 +7382,9 @@ fn resident(spec: AppSpec<App>) -> Result<(), String> {
         Ok(_) => app.keep_running(),
         Err(_) => app,
     };
-    let desk = tray
-        .is_ok()
-        .then(|| Box::new(Resident(handle)) as Box<dyn Desk>);
+    // With no tray too: a window that is open may be under another, and a
+    // request is announced wherever the window is.
+    let desk = Some(Box::new(Resident(handle)) as Box<dyn Desk>);
     let result = app.init(move || App { desk, ..init() }).try_run();
     drop(tray);
     if let Some(socket) = left {

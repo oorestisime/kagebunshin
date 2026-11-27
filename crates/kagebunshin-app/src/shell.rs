@@ -333,10 +333,20 @@ fn says_light(answer: &str) -> bool {
     words.next() == Some("2") && words.next() == Some("u")
 }
 
-/// Shows a desktop notification for `lasts`, where `notify-send` is
-/// installed; says nothing where it is not. `summary` and `body` name
-/// things, never values: notification daemons keep a history.
+/// Shows a desktop notification: on macOS as the app's own, which only an
+/// app run from its bundle can post and which its person allows the first
+/// time; elsewhere for `lasts`, where `notify-send` is installed. Says
+/// nothing where neither is. `summary` and `body` name things, never
+/// values: notification centres keep a history.
 pub fn notify(summary: &str, body: &str, lasts: Duration) {
+    // Each its own: one posted under the id of another replaces it
+    // without a word.
+    static POSTED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let id = POSTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let note = rune_notify::Notification::new(format!("kagebunshin-{id}"), summary).body(body);
+    if rune_notify::post(&note) {
+        return;
+    }
     let child = Command::new("notify-send")
         .args(["--app-name", "kagebunshin"])
         .args(["--expire-time", &lasts.as_millis().to_string()])
