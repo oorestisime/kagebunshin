@@ -196,9 +196,8 @@ pub fn start_daemon_hint() -> String {
 }
 
 /// What to do about a daemon that does not answer: on a machine with no
-/// store, nothing is set up yet, and `setup` does all of it.
-fn not_running_hint() -> String {
-    let store = crate::config::ConfigDir::from_env().is_ok_and(|d| d.store_file().exists());
+/// `store`, nothing is set up yet, and `setup` does all of it.
+fn not_running_hint(store: bool) -> String {
     if store {
         start_daemon_hint()
     } else {
@@ -222,9 +221,11 @@ impl From<ClientError> for CliError {
         let message = e.to_string();
         match e {
             ClientError::NotRunning { .. } => {
+                let store =
+                    crate::config::ConfigDir::from_env().is_ok_and(|d| d.store_file().exists());
                 CliError::new(Exit::DaemonNotRunning, "daemon_not_running", message)
-                    .with_hint(not_running_hint())
-                    .human(not_running_hint())
+                    .with_hint(not_running_hint(store))
+                    .human(not_running_hint(store))
             }
             ClientError::InsecureDir(_) | ClientError::ForeignDaemon { .. } => {
                 CliError::new(Exit::Refused, "insecure_socket", message)
@@ -357,15 +358,26 @@ mod tests {
         assert_eq!((e.exit, e.who), (Exit::Refused, Some(Who::Human)));
     }
 
+    /// A daemon that does not answer is to be started, with the service
+    /// manager's own command; on a machine with no store there is nothing
+    /// to start yet, and `setup` is the one thing to run.
     #[test]
-    fn not_running_hint_names_the_service_manager() {
+    fn not_running_hint_names_the_service_manager_or_setup() {
         let socket = "/x/kagebunshind.sock".into();
         let e = CliError::from(ClientError::NotRunning { socket });
-        assert_eq!(e.exit, Exit::DaemonNotRunning);
-        let hint = e.hint.unwrap();
+        assert_eq!((e.exit, e.who), (Exit::DaemonNotRunning, Some(Who::Human)));
+        assert_eq!(e.hint, e.tell);
+
+        let hint = not_running_hint(true);
         #[cfg(target_os = "linux")]
         assert!(hint.contains("systemctl --user"), "{hint}");
         #[cfg(target_os = "macos")]
         assert!(hint.contains("launchctl"), "{hint}");
+        let hint = not_running_hint(false);
+        assert!(
+            hint.contains("run `kagebunshin setup` in a terminal"),
+            "{hint}"
+        );
+        assert!(!hint.contains("daemon install"), "{hint}");
     }
 }
