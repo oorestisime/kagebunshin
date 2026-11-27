@@ -8,7 +8,7 @@ x86_64 build is in daily use, and the macOS one is unsigned.
 ```sh
 curl -fsSLO https://raw.githubusercontent.com/oorestisime/kagebunshin/main/packaging/install.sh
 sh install.sh                          # the newest release
-sh install.sh --version 0.0.1-alpha.18  # or a given one
+sh install.sh --version 0.0.1-alpha.19  # or a given one
 ```
 
 It downloads the release tarball (the CLI and the app) with curl, or with

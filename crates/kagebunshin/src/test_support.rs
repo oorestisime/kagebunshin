@@ -77,6 +77,35 @@ pub fn caller_for(pid: i32) -> Caller {
     }
 }
 
+/// A process no coding agent stands behind, whatever these tests run
+/// under: its parent exited, so it descends from nothing but what adopts
+/// orphans. Killed on drop.
+pub struct Orphan(i32);
+
+impl Orphan {
+    pub fn start() -> Self {
+        let out = std::process::Command::new("sh")
+            .args(["-c", "sleep 300 >/dev/null 2>&1 & echo $!"])
+            .output()
+            .expect("sh runs");
+        let pid = String::from_utf8_lossy(&out.stdout).trim().parse();
+        Self(pid.expect("the pid of the sleep"))
+    }
+
+    /// As the daemon would see it.
+    pub fn caller(&self) -> Caller {
+        caller_for(self.0)
+    }
+}
+
+impl Drop for Orphan {
+    fn drop(&mut self) {
+        let _ = std::process::Command::new("kill")
+            .arg(self.0.to_string())
+            .status();
+    }
+}
+
 /// The caller the daemon would see for this process.
 pub fn this_process() -> Caller {
     caller_for(std::process::id() as i32)

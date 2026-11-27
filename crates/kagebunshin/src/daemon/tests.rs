@@ -239,6 +239,7 @@ async fn starts_locked_and_refuses_values() {
             shared: Vec::new(),
             app: false,
             phone: None,
+            standing: Vec::new(),
         }
     );
     assert_eq!(
@@ -4665,14 +4666,26 @@ async fn asked_in_the_app(
     tokio::task::JoinHandle<Response>,
     Vec<crate::ipc::protocol::ApprovalPrompt>,
 ) {
+    asked_from(d, req, &this_process()).await
+}
+
+/// [`asked_in_the_app`], by `caller`.
+async fn asked_from(
+    d: &Daemon,
+    req: Request,
+    caller: &crate::ipc::protocol::Caller,
+) -> (
+    tokio::task::JoinHandle<Response>,
+    Vec<crate::ipc::protocol::ApprovalPrompt>,
+) {
     let app = tokio::spawn({
         let d = d.clone();
         async move { d.handle(Request::WaitApprovals { known: Vec::new() }).await }
     });
     tokio::task::yield_now().await;
     let asked = tokio::spawn({
-        let d = d.clone();
-        async move { d.handle(req).await }
+        let (d, caller) = (d.clone(), caller.clone());
+        async move { d.handle_from(req, &caller).await }
     });
     let Response::Approvals { pending } = app.await.unwrap() else {
         panic!("not approvals");
@@ -7586,3 +7599,4 @@ async fn values_nobody_types_are_not_set() {
 }
 
 mod phone;
+mod standing;

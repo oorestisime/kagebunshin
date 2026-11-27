@@ -62,7 +62,13 @@ tray icon opens it. It waits
 five minutes for your answer (`approval_timeout` in `config.toml` sets how
 long). The window asks one question: who asks, the command, the keys it
 gets in one line and the time left. Details opens the rest: every key, the
-processes the request came through, why it asks and what approving does. A `kagebunshin store set` run with no terminal
+processes the request came through, why it asks and what approving does.
+Where a coding agent or another machine asks, a second button, "For 15
+min", approves the request and lets that agent have the same environment
+again for 15 minutes without asking; what stands is listed at the top of
+the window with the time left and an "End now" button, which takes no
+passphrase ([threat-model.md](threat-model.md#an-approval-left-standing)
+says what it covers). A `kagebunshin store set` run with no terminal
 asks for values: the window has a hidden field for each key, says which
 keys have a value that yours would replace, and Save writes what you typed
 with the passphrase; a field left empty leaves its key as it was. Closing

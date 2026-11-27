@@ -86,6 +86,8 @@ pub fn deadline(req: &Request, local: Duration) -> Duration {
         | Request::StoreClear { .. }
         | Request::StorePasswd { .. }
         | Request::Approve { .. }
+        | Request::ApproveStanding { .. }
+        | Request::EndStanding { .. }
         | Request::RemoteEnable { .. }
         | Request::RemoteRevoke { .. }
         | Request::RemoteRotate { .. }

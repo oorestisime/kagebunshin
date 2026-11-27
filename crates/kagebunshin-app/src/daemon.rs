@@ -29,7 +29,8 @@ use kagebunshin::cli::error::start_daemon_hint;
 use kagebunshin::ipc::client::{Client, ClientError, DEFAULT_TIMEOUT};
 use kagebunshin::ipc::protocol::{
     ApprovalPrompt, ErrorCode, Facts, Fix, GrantView, KeyStatus, PhoneChoice, PhoneStatus, Proof,
-    RemoteStatus, Request, Response, SharedSecret, TokenExpiry, VarStatus, WaitingEnv, WireSecret,
+    RemoteStatus, Request, Response, SharedSecret, StandingView, TokenExpiry, VarStatus,
+    WaitingEnv, WireSecret,
 };
 use kagebunshin::source::ProviderStatus;
 use kagebunshin::store::Section;
@@ -181,6 +182,11 @@ pub enum Job {
     },
     /// End a pairing before its time is up.
     StopPairing,
+    /// End the approvals that stand for one environment.
+    EndStanding {
+        project: ProjectName,
+        env: EnvName,
+    },
     /// Remove the paired phone, by the name to say of it.
     UnpairPhone {
         name: String,
@@ -310,6 +316,8 @@ pub struct Probed {
     /// The approval page and the phone paired with it; none when no phone
     /// is paired or being paired, which is all that is known while locked.
     pub phone: Option<Box<PhoneStatus>>,
+    /// The approvals that stand; known only while unlocked.
+    pub standing: Vec<StandingView>,
 }
 
 #[cfg(test)]
@@ -323,6 +331,7 @@ impl Probed {
             shared: Vec::new(),
             remote: None,
             phone: None,
+            standing: Vec::new(),
         }
     }
 }
@@ -350,6 +359,8 @@ pub enum Done {
     GrantRevoked(Grant),
     /// The pairing under way, if any, was ended.
     PairingStopped,
+    /// The approvals that stood for an environment were ended.
+    StandingEnded,
     /// The phone of this name is paired no more.
     PhoneUnpaired(String),
 }
@@ -455,6 +466,7 @@ pub fn run(client: &mut dyn DaemonClient, job: Job) -> Answer {
                 shared: r.shared,
                 remote: r.remote,
                 phone: r.phone,
+                standing: r.standing,
             }),
             Ok(_) => Err(unexpected()),
             Err(e) => Err(e.into()),
@@ -531,6 +543,13 @@ pub fn run(client: &mut dyn DaemonClient, job: Job) -> Answer {
                 Err(e) => Err(e.into()),
             },
         ),
+        Job::EndStanding { project, env } => Answer::Action(
+            match client.request(Request::EndStanding { project, env }) {
+                Ok(Response::StandingEnded { .. }) => Ok(Done::StandingEnded),
+                Ok(_) => Err(unexpected()),
+                Err(e) => Err(e.into()),
+            },
+        ),
         Job::StopPairing => Answer::Action(match client.request(Request::PhonePairStop) {
             Ok(Response::PhonePairStopped) => Ok(Done::PairingStopped),
             Ok(_) => Err(unexpected()),
@@ -564,6 +583,7 @@ fn action(client: &mut dyn DaemonClient, job: Job) -> Result<Done, Problem> {
         | Job::Phones
         | Job::PairPhone { .. }
         | Job::StopPairing
+        | Job::EndStanding { .. }
         | Job::UnpairPhone { .. } => {
             unreachable!("not an action")
         }
@@ -818,13 +838,18 @@ pub fn approve(
         id,
         passphrase,
         values,
+        standing,
     }: ApprovalAnswer,
 ) -> Result<Vec<ApprovalPrompt>, Problem> {
-    match client.request(Request::Approve {
-        id,
-        passphrase,
-        values,
-    }) {
+    let req = match (standing, passphrase) {
+        (true, Some(passphrase)) => Request::ApproveStanding { id, passphrase },
+        (_, passphrase) => Request::Approve {
+            id,
+            passphrase,
+            values,
+        },
+    };
+    match client.request(req) {
         Ok(Response::Approvals { pending }) => Ok(pending),
         Ok(_) => Err(unexpected()),
         Err(e) => Err(e.into()),
@@ -842,12 +867,14 @@ pub struct Approver {
 
 /// A request's id, and the passphrase that approves it or none to deny
 /// it. `values` are what a person typed for the keys of a request that
-/// asks for them; none for any other request, or to deny.
+/// asks for them; none for any other request, or to deny. `standing`
+/// leaves the approval standing, where the request's prompt offers that.
 #[derive(Debug)]
 pub struct ApprovalAnswer {
     pub id: u64,
     pub passphrase: Option<WireSecret>,
     pub values: Vec<(KeyName, WireSecret)>,
+    pub standing: bool,
 }
 
 impl ApprovalAnswer {
@@ -856,6 +883,7 @@ impl ApprovalAnswer {
             id,
             passphrase: None,
             values: Vec::new(),
+            standing: false,
         }
     }
 }
@@ -985,6 +1013,7 @@ mod tests {
             shared: Vec::new(),
             app: false,
             phone: None,
+            standing: Vec::new(),
         })
     }
 
@@ -1373,6 +1402,7 @@ mod tests {
             remote: None,
             secrets: Vec::new(),
             every_key: false,
+            standing: None,
         };
         let fake = FakeClient::default();
         fake.reply(Ok(Response::Approvals {
@@ -1393,11 +1423,29 @@ mod tests {
                 id: 7,
                 passphrase: Some(secret("nope")),
                 values: vec![("TOKEN".parse().unwrap(), secret("typed"))],
+                standing: false,
             },
         )
         .unwrap_err();
         assert_eq!(wrong.message, "wrong passphrase");
         assert_eq!(approve(&mut c, ApprovalAnswer::deny(7)), Ok(Vec::new()));
+        // Left standing, it is another request; a denial never is.
+        fake.reply(Ok(Response::Approvals {
+            pending: Vec::new(),
+        }));
+        let standing = ApprovalAnswer {
+            id: 7,
+            passphrase: Some(secret("pw")),
+            values: Vec::new(),
+            standing: true,
+        };
+        assert_eq!(approve(&mut c, standing), Ok(Vec::new()));
+        fake.reply(Ok(Response::StandingEnded { ended: 1 }));
+        let end = Job::EndStanding {
+            project: "widget".parse().unwrap(),
+            env: "prod".parse().unwrap(),
+        };
+        assert_eq!(run(&mut c, end), Answer::Action(Ok(Done::StandingEnded)));
         assert_eq!(watch(&mut c, Vec::new()), None, "not running");
         let asked = fake.asked.lock().unwrap();
         assert_eq!(asked[0], Request::WaitApprovals { known: vec![3] });
@@ -1413,6 +1461,17 @@ mod tests {
                 id: 7,
                 passphrase: None,
                 values: Vec::new(),
+            }
+        );
+        assert!(matches!(
+            &asked[3],
+            Request::ApproveStanding { id: 7, passphrase } if passphrase.expose() == "pw"
+        ));
+        assert_eq!(
+            asked[4],
+            Request::EndStanding {
+                project: "widget".parse().unwrap(),
+                env: "prod".parse().unwrap(),
             }
         );
     }
@@ -1587,6 +1646,7 @@ mod tests {
             shared: Vec::new(),
             app: false,
             phone: None,
+            standing: Vec::new(),
         })));
         let (woke, wakes) = mpsc::channel();
         let waker: Waker = Arc::new(move || {
@@ -1648,6 +1708,7 @@ mod tests {
                     shared: Vec::new(),
                     app: false,
                     phone: None,
+                    standing: Vec::new(),
                 }),
             })
         }

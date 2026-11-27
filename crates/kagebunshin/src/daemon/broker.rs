@@ -60,8 +60,9 @@ use crate::ipc::protocol::{
     APPROVAL_POLL, ApprovalPrompt, ApprovalReason, Caller, Conflict, DiffReport, EnvCheck,
     EnvStatus, ErrorCode, Facts, Fix, ImportNames, ImportSection, ImportedSection, KeyStatus,
     MarkTarget, OriginCount, ProjectCheck, Proof, RemotePeer, RemoteStatus, Request, Response,
-    RunEnvReply, SharedSecret, StatusReport, StoreListing, StoreSection, SyncReport, Synced,
-    TokenExpiry, VarStatus, WaitingEnv, WireError, WireSecret, WireVar,
+    RunEnvReply, SharedSecret, StandingOffer, StandingView, StatusReport, StoreListing,
+    StoreSection, SyncReport, Synced, TokenExpiry, VarStatus, WaitingEnv, WireError, WireSecret,
+    WireVar,
 };
 use crate::source::aws_sm::AwsSettings;
 use crate::source::{Health, Listed, ProviderStatus};
@@ -467,22 +468,27 @@ struct Approved {
     /// ([`ApprovalReason::Type`]): at least one, each a key of the prompt,
     /// none twice. Empty for every other prompt.
     values: Vec<(KeyName, SecretValue)>,
+    /// The approval is left standing; see [`Standing`].
+    standing: bool,
 }
 
 /// A person's answer to a prompt, by where they gave it.
 enum Reply {
     /// In the app: what approved it, or none for a denial.
     Desk(Option<Approved>),
-    /// On the paired phone: approved with its passkey, or denied. Only a
-    /// prompt that hands values out is approved there.
-    Phone(bool),
+    /// On the paired phone: approved with its passkey, and whether the
+    /// approval is left standing, or denied. Only a prompt that hands
+    /// values out is approved there.
+    Phone { approved: bool, standing: bool },
 }
 
 /// How a prompt shown in the app ended.
 enum Answer {
     Approved(Approved),
     /// Approved on the paired phone, which has no passphrase to give.
-    ApprovedOnPhone,
+    ApprovedOnPhone {
+        standing: bool,
+    },
     Denied,
     TimedOut,
     /// The process that asked ended first.
@@ -936,7 +942,9 @@ impl Asked {
             Request::PhonePairStop => asked("phone pair stop", true),
             Request::PhoneUnpair { .. } => asked("phone unpair", true),
             Request::WaitApprovals { .. } => asked("wait approvals", false),
-            Request::Approve { .. } => asked("approve", false),
+            Request::Approve { .. } | Request::ApproveStanding { .. } => asked("approve", false),
+            // What it ended is recorded where it ends.
+            Request::EndStanding { .. } => asked("end approval", false),
             Request::Proven { facts, program } => Asked {
                 program: Some(program.clone()),
                 ..about("proven", false, facts)
@@ -1013,6 +1021,134 @@ struct Session {
     /// store was decrypted with, without decrypting it again; none where
     /// there is no store.
     verifier: Option<Arc<Verifier>>,
+    /// The approvals left standing. Kept here, so a lock ends them all.
+    standing: Vec<Standing>,
+}
+
+/// How long an approval that is left standing stands.
+pub(super) const STANDING: Duration = Duration::from_mins(15);
+
+/// How far up a caller's parents the holder of a standing approval is
+/// looked for: further than a prompt looks, as a command an agent runs
+/// may itself run several more.
+const HELD_WITHIN: usize = 64;
+
+/// Whom an approval stands for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum Holder {
+    /// A coding agent's process on this machine: what descends from it.
+    /// The pid and its start time name one process; its name is only what
+    /// a prompt called it.
+    Agent {
+        pid: i32,
+        start: crate::sys::ProcStart,
+        name: &'static str,
+    },
+    /// A machine on the tailnet, by its node.
+    Machine { node: String, machine: String },
+}
+
+impl Holder {
+    /// Who would hold an approval `caller` asks for: its machine, or the
+    /// nearest coding agent among the processes it descends from, as far
+    /// up as a prompt looks. None for a caller no agent stands behind,
+    /// such as a command typed at a terminal.
+    pub(super) fn of(caller: &Caller) -> Option<Self> {
+        if let Some(peer) = &caller.remote {
+            return Some(Self::Machine {
+                node: peer.node.clone(),
+                machine: peer.machine.clone(),
+            });
+        }
+        let mut pid = caller.pid;
+        for _ in 0..ANCESTORS {
+            let parent = crate::sys::parent_pid(pid).ok().filter(|p| *p > 1)?;
+            let name = crate::sys::process_name(parent).ok()?;
+            if let Some(name) = crate::ipc::prompt::agent_named(&name) {
+                let start = crate::sys::process_start(parent).ok()?;
+                return Some(Self::Agent {
+                    pid: parent,
+                    start,
+                    name,
+                });
+            }
+            pid = parent;
+        }
+        None
+    }
+
+    /// Whether `caller` is its to speak for: a request from that machine,
+    /// or a process that descends from that agent's, which is still the
+    /// process it was. A process cannot give itself another parent, and
+    /// one whose parents have gone descends from nothing.
+    pub(super) fn covers(&self, caller: &Caller) -> bool {
+        match (self, &caller.remote) {
+            (Self::Machine { node, .. }, Some(peer)) => peer.node == *node,
+            (Self::Agent { pid, .. }, None) => {
+                let mut at = caller.pid;
+                for _ in 0..HELD_WITHIN {
+                    match crate::sys::parent_pid(at) {
+                        Ok(parent) if parent == *pid => return self.lives(),
+                        Ok(parent) if parent > 1 => at = parent,
+                        _ => return false,
+                    }
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether it is still there to hold anything.
+    fn lives(&self) -> bool {
+        match self {
+            Self::Agent { pid, start, .. } => crate::sys::process_start(*pid).ok() == Some(*start),
+            Self::Machine { .. } => true,
+        }
+    }
+
+    /// As a prompt and `status` name it.
+    pub(super) fn named(&self) -> String {
+        match self {
+            Self::Agent { name, .. } => (*name).to_owned(),
+            Self::Machine { machine, .. } => format!("machine {machine}"),
+        }
+    }
+}
+
+/// An approval left standing: until `until`, `holder` gets `env` without
+/// being asked, as far as what a person approved goes.
+struct Standing {
+    env: EnvKey,
+    /// The sources the environment read from when it was approved: with
+    /// others, it is another environment.
+    sources: Vec<SourceSpec>,
+    scope: Scope,
+    holder: Holder,
+    until: Instant,
+}
+
+/// What a request asks a person for, and so what an approval covers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct Scope {
+    /// The environment as a whole is held back, not some of its keys.
+    pub(super) whole: bool,
+    /// The keys named one by one; none for a whole environment approved
+    /// whatever it sets.
+    pub(super) keys: Option<BTreeSet<KeyName>>,
+}
+
+impl Scope {
+    /// Whether an approval of this covers a request for `asked`: the same
+    /// kind of request, for no key that was not approved.
+    pub(super) fn covers(&self, asked: &Self) -> bool {
+        self.whole == asked.whole
+            && match (&self.keys, &asked.keys) {
+                (None, None) => true,
+                (Some(approved), Some(asked)) => asked.is_subset(approved),
+                _ => false,
+            }
+    }
 }
 
 /// Wrong passphrases in a row, and when the next one may be checked.
@@ -1458,6 +1594,7 @@ impl Daemon {
                 report.waiting = self.waiting();
                 report.acknowledged = self.acknowledged();
                 report.shared = self.shared(&report.waiting);
+                report.standing = self.standing();
                 Response::Status(report)
             }),
             Request::RemoteEnable {
@@ -1530,9 +1667,21 @@ impl Daemon {
                 passphrase,
                 values,
             } => self
-                .approve(id, passphrase.map(WireSecret::into_passphrase), values)
+                .approve(
+                    id,
+                    passphrase.map(WireSecret::into_passphrase),
+                    values,
+                    false,
+                )
                 .await
                 .map(|pending| Response::Approvals { pending }),
+            Request::ApproveStanding { id, passphrase } => self
+                .approve(id, Some(passphrase.into_passphrase()), Vec::new(), true)
+                .await
+                .map(|pending| Response::Approvals { pending }),
+            Request::EndStanding { project, env } => Ok(Response::StandingEnded {
+                ended: self.end_standing(&project, &env, caller),
+            }),
             Request::Inspect { facts, passphrase } => self
                 .inspect(&facts, passphrase.into_passphrase())
                 .await
@@ -1885,6 +2034,7 @@ impl Daemon {
                     shared: Vec::new(),
                     app: false,
                     phone: None,
+                    standing: Vec::new(),
                 })
             }),
             Request::Status {
@@ -2338,6 +2488,7 @@ impl Daemon {
                 store,
                 pairing: None,
                 verifier,
+                standing: Vec::new(),
             });
             id
         };
@@ -2705,6 +2856,7 @@ impl Daemon {
                 shared: Vec::new(),
                 app: false,
                 phone: None,
+                standing: Vec::new(),
             });
         };
         self.status_of(&facts, Who::Anyone).await
@@ -2757,6 +2909,7 @@ impl Daemon {
             shared: Vec::new(),
             app: false,
             phone: None,
+            standing: Vec::new(),
         })
     }
 
@@ -3563,8 +3716,23 @@ impl Daemon {
             shown: shown.clone(),
             every_key,
         };
-        self.wait_for_approval(ask, &env_key, wanted, secrets, refused)
-            .await?;
+        // A whole environment with a list of keys (`.env.example`) is
+        // approved whatever it sets; one shown key by key is approved as
+        // those keys.
+        let by_key = !whole || (every_key && !shown.is_empty());
+        let scope = Scope {
+            whole,
+            keys: by_key.then(|| shown.iter().cloned().collect()),
+        };
+        let holder = Holder::of(ask.caller);
+        // An approval that stands for this caller answers in a person's
+        // place; one given now may be left standing in turn.
+        let lasting = if self.stands(ask, &env_key, &sources, &scope, &wanted.keys)? {
+            false
+        } else {
+            self.wait_for_approval(ask, &env_key, wanted, secrets, refused, holder.as_ref())
+                .await?
+        };
         // The project file, the marks or the cache may have changed while
         // the person read the prompt; what they approved is what goes out,
         // or nothing does. Other sources are not even fetched.
@@ -3580,10 +3748,6 @@ impl Daemon {
             return Err(changed());
         }
         let (now_key, values, now_sources) = self.hand_out_as(facts, Who::Human, touch).await?;
-        // A whole environment with a list of keys (`.env.example`) is
-        // approved whatever it sets; one shown key by key is approved as
-        // those keys.
-        let by_key = !whole || (every_key && !shown.is_empty());
         let scope_grew = match self.marked_keys(&now_key, &values, facts, only)? {
             Some((now_marked, _)) => by_key && now_marked.iter().any(|k| !shown.contains(k)),
             None => false,
@@ -3593,7 +3757,155 @@ impl Daemon {
         if now_key != env_key || now_sources != sources || values.sources != sources || scope_grew {
             return Err(changed());
         }
+        // Only now: what was approved is what went out.
+        if let (true, Some(holder)) = (lasting, holder) {
+            self.stand(
+                ask,
+                Standing {
+                    env: env_key,
+                    sources,
+                    scope,
+                    holder,
+                    until: Instant::now() + STANDING,
+                },
+            );
+        }
         Ok((now_key, values))
+    }
+
+    /// Whether an approval stands that answers `ask`'s request for `scope`
+    /// of `env`, read from `sources`: one for that environment as it was
+    /// approved, held by `ask`'s caller, that covers what is asked and has
+    /// time left. Recorded before it counts, as a prompt is before it is
+    /// shown: `keys` are what the log names.
+    fn stands(
+        &self,
+        ask: &Ask<'_>,
+        env: &EnvKey,
+        sources: &[SourceSpec],
+        scope: &Scope,
+        keys: &[KeyName],
+    ) -> Result<bool, ResolveError> {
+        let now = Instant::now();
+        let holders: Vec<Holder> = {
+            let mut st = self.inner.state();
+            let Phase::Unlocked(session) = &mut st.phase else {
+                return Ok(false);
+            };
+            session.standing.retain(|s| now < s.until);
+            (session.standing.iter())
+                .filter(|s| s.env == *env && s.sources == sources && s.scope.covers(scope))
+                .map(|s| s.holder.clone())
+                .collect()
+        };
+        // Not under the lock: this reads what the kernel says of processes.
+        let Some(holder) = holders.into_iter().find(|h| h.covers(ask.caller)) else {
+            return Ok(false);
+        };
+        let (project, env) = env;
+        if let Some(log) = &self.inner.audit {
+            let mut event = Event::new("use approval", Decision::Allowed, ask.caller);
+            event.target = Some(format!("{}, standing for {}", ask.action, holder.named()));
+            (event.project, event.env) = (Some(project.clone()), Some(env.clone()));
+            event.keys = keys.iter().map(ToString::to_string).collect();
+            event.program.clone_from(&ask.program);
+            log.append(&event).map_err(|e| {
+                ResolveError::Internal(format!(
+                    "an approval that stands is used only once the audit log records it, and {} cannot be written: {e}",
+                    log.path().display()
+                ))
+            })?;
+        }
+        info!(%project, %env, holder = %holder.named(), "handed out under an approval that stands");
+        *ask.approval.lock().unwrap_or_else(PoisonError::into_inner) = Some(Decision::Allowed);
+        Ok(true)
+    }
+
+    /// Leaves `standing` standing, in place of one its holder had for the
+    /// same environment.
+    fn stand(&self, ask: &Ask<'_>, standing: Standing) {
+        let (project, env) = standing.env.clone();
+        let holder = standing.holder.named();
+        {
+            let mut st = self.inner.state();
+            let Phase::Unlocked(session) = &mut st.phase else {
+                return;
+            };
+            session
+                .standing
+                .retain(|s| !(s.env == standing.env && s.holder == standing.holder));
+            session.standing.push(standing);
+        }
+        info!(%project, %env, %holder, "an approval stands");
+        if let Some(log) = &self.inner.audit {
+            let mut event = Event::new("approval stands", Decision::Allowed, ask.caller);
+            event.target = Some(format!("for {holder}, {} minutes", STANDING.as_secs() / 60));
+            (event.project, event.env) = (Some(project), Some(env));
+            if let Err(e) = log.append(&event) {
+                warn!(error = %e, path = %log.path().display(), "cannot write the audit log");
+            }
+        }
+        // What the approval page shows of it.
+        self.inner.phone_seq.send_modify(|n| *n += 1);
+    }
+
+    /// The approvals that stand, while unlocked: those with time left
+    /// whose holder is still there. The rest are dropped.
+    pub(super) fn standing(&self) -> Vec<StandingView> {
+        let now = Instant::now();
+        let held: Vec<(EnvKey, Holder, Instant)> = match &self.inner.state().phase {
+            Phase::Unlocked(session) => (session.standing.iter())
+                .map(|s| (s.env.clone(), s.holder.clone(), s.until))
+                .collect(),
+            Phase::Locked => return Vec::new(),
+        };
+        let gone: Vec<(EnvKey, Holder)> = (held.iter())
+            .filter(|(_, holder, until)| now >= *until || !holder.lives())
+            .map(|(env, holder, _)| (env.clone(), holder.clone()))
+            .collect();
+        if !gone.is_empty()
+            && let Phase::Unlocked(session) = &mut self.inner.state().phase
+        {
+            session
+                .standing
+                .retain(|s| !gone.contains(&(s.env.clone(), s.holder.clone())));
+        }
+        held.into_iter()
+            .filter(|(env, holder, _)| !gone.contains(&(env.clone(), holder.clone())))
+            .map(|((project, env), holder, until)| StandingView {
+                project,
+                env,
+                holder: holder.named(),
+                left: until.saturating_duration_since(now).as_secs(),
+            })
+            .collect()
+    }
+
+    /// [`Request::EndStanding`]: ends every approval that stands for `env`
+    /// of `project`; how many.
+    pub(super) fn end_standing(&self, project: &ProjectName, env: &EnvName, by: &Caller) -> usize {
+        let ended = match &mut self.inner.state().phase {
+            Phase::Unlocked(session) => {
+                let before = session.standing.len();
+                session
+                    .standing
+                    .retain(|s| !(s.env.0 == *project && s.env.1 == *env));
+                before - session.standing.len()
+            }
+            Phase::Locked => 0,
+        };
+        if ended > 0 {
+            info!(%project, %env, ended, "ended the approvals that stood");
+            if let Some(log) = &self.inner.audit {
+                let mut event = Event::new("end approval", Decision::Allowed, by);
+                (event.project, event.env) = (Some(project.clone()), Some(env.clone()));
+                if let Err(e) = log.append(&event) {
+                    warn!(error = %e, path = %log.path().display(), "cannot write the audit log");
+                }
+            }
+            self.inner.phone_seq.send_modify(|n| *n += 1);
+        }
+        ended
     }
 
     /// The keys of `values` that `facts` wants (or just `only`) and that may
@@ -3660,7 +3972,8 @@ impl Daemon {
         wanted: Wanted,
         secrets: Vec<Origin>,
         refused: ResolveError,
-    ) -> Result<(), ResolveError> {
+        holder: Option<&Holder>,
+    ) -> Result<bool, ResolveError> {
         let Wanted {
             keys,
             shown,
@@ -3742,12 +4055,18 @@ impl Daemon {
             remote: ask.caller.remote.as_ref().map(RemotePeer::named),
             secrets: secrets.clone(),
             every_key,
+            standing: holder.map(|holder| StandingOffer {
+                seconds: STANDING.as_secs(),
+                holder: holder.named(),
+            }),
         };
         info!(%project, %env, "waiting for approval");
-        let decision = match self.ask_app(ask.caller, prompt, wait).await {
-            Answer::Approved(_) | Answer::ApprovedOnPhone => Decision::Allowed,
-            Answer::Denied => Decision::Denied,
-            Answer::TimedOut => Decision::TimedOut,
+        let (decision, standing) = match self.ask_app(ask.caller, prompt, wait).await {
+            Answer::Approved(Approved { standing, .. }) | Answer::ApprovedOnPhone { standing } => {
+                (Decision::Allowed, standing)
+            }
+            Answer::Denied => (Decision::Denied, false),
+            Answer::TimedOut => (Decision::TimedOut, false),
             Answer::CallerGone => {
                 info!(%project, %env, "the caller ended while waiting for approval");
                 *ask.approval.lock().unwrap_or_else(PoisonError::into_inner) =
@@ -3764,7 +4083,7 @@ impl Daemon {
         };
         *ask.approval.lock().unwrap_or_else(PoisonError::into_inner) = Some(decision);
         match decision {
-            Decision::Allowed => Ok(()),
+            Decision::Allowed => Ok(standing),
             d => Err(unapproved(d == Decision::TimedOut)),
         }
     }
@@ -3822,8 +4141,11 @@ impl Daemon {
         );
         match reply {
             Ok(Reply::Desk(Some(approved))) => Answer::Approved(approved),
-            Ok(Reply::Phone(true)) => Answer::ApprovedOnPhone,
-            Ok(Reply::Desk(None) | Reply::Phone(false)) => Answer::Denied,
+            Ok(Reply::Phone {
+                approved: true,
+                standing,
+            }) => Answer::ApprovedOnPhone { standing },
+            Ok(Reply::Desk(None) | Reply::Phone { .. }) => Answer::Denied,
             Err(ended) => ended,
         }
     }
@@ -4002,6 +4324,7 @@ impl Daemon {
             remote: None,
             secrets: Vec::new(),
             every_key: false,
+            standing: None,
         };
         info!(
             sections = sections.len(),
@@ -4014,7 +4337,7 @@ impl Daemon {
             }
             // The phone approves no import: it has no passphrase to write
             // the store with, so `phone_answer` refuses before this.
-            Answer::Denied | Answer::ApprovedOnPhone => {
+            Answer::Denied | Answer::ApprovedOnPhone { .. } => {
                 (Some(Decision::Denied), ImportRefusal::Denied)
             }
             Answer::TimedOut => (Some(Decision::TimedOut), ImportRefusal::TimedOut(wait)),
@@ -4102,6 +4425,7 @@ impl Daemon {
             remote: None,
             secrets: Vec::new(),
             every_key: false,
+            standing: None,
         };
         info!(%section, keys = keys.len(), "values wait to be typed into the app");
         let (decision, refusal) = match self.ask_app(caller, prompt, wait).await {
@@ -4112,7 +4436,7 @@ impl Daemon {
                     .await;
             }
             // Nor typed values, which it could not give either.
-            Answer::Denied | Answer::ApprovedOnPhone => {
+            Answer::Denied | Answer::ApprovedOnPhone { .. } => {
                 (Some(Decision::Denied), ImportRefusal::Denied)
             }
             Answer::TimedOut => (Some(Decision::TimedOut), ImportRefusal::TimedOut(wait)),
@@ -4132,7 +4456,9 @@ impl Daemon {
         &self,
         section: Section,
         keys: Vec<KeyName>,
-        Approved { passphrase, values }: Approved,
+        Approved {
+            passphrase, values, ..
+        }: Approved,
         unlock: bool,
         caller: &Caller,
     ) -> Result<Response, ResolveError> {
@@ -4223,17 +4549,26 @@ impl Daemon {
     /// twice. Any other request is approved with none. They are checked
     /// before the passphrase, and what is refused leaves the request
     /// waiting.
+    ///
+    /// `standing` leaves the approval standing: only for a request whose
+    /// prompt offers that.
     async fn approve(
         &self,
         id: u64,
         passphrase: Option<Passphrase>,
         values: Vec<(KeyName, WireSecret)>,
+        standing: bool,
     ) -> Result<Vec<ApprovalPrompt>, ResolveError> {
         let typed = {
             let a = self.inner.approvals();
             let Some((prompt, ..)) = a.pending.get(&id) else {
                 return Err(ResolveError::NoApproval(id));
             };
+            if standing && prompt.standing.is_none() {
+                return Err(ResolveError::BadRequest(format!(
+                    "request {id} is approved for itself only"
+                )));
+            }
             matches!(prompt.reason, ApprovalReason::Type { .. }).then(|| prompt.keys.clone())
         };
         if passphrase.is_some() {
@@ -4261,6 +4596,7 @@ impl Daemon {
                 values: (values.into_iter())
                     .map(|(k, v)| (k, v.into_value()))
                     .collect(),
+                standing,
             }),
             None => None,
         };
