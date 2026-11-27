@@ -210,6 +210,10 @@ pub enum Command {
     /// Revealing a value and changing a sensitive mark there ask for the
     /// store passphrase.
     ///
+    /// On macOS there is no tray: closing the window ends the app. The app
+    /// is also `Kagebunshin.app` in ~/Applications, which this writes and
+    /// keeps up to date, so it opens from Spotlight and Launchpad too.
+    ///
     /// Where the daemon is a systemd user service, the app is one beside
     /// it, `kagebunshin-app.service`: restarted if it fails, and
     /// `journalctl --user -u kagebunshin-app` has what it printed.
@@ -495,15 +499,16 @@ pub enum MarkAction {
 
 #[derive(Debug, Subcommand)]
 pub enum AppAction {
-    /// Add the app to the launcher and start it in the tray at login (Linux)
+    /// Add the app to the launcher and to login (Linux), or to ~/Applications (macOS)
     ///
-    /// Writes a launcher entry, a login entry that starts the app with
-    /// --hidden, and its icon. Both entries run this binary's `app` on the
-    /// socket this command resolves. An app that is running is restarted,
-    /// on the binary found now. `setup` does this too. A file of the same
-    /// name that kagebunshin did not write is left alone.
+    /// On Linux, writes a launcher entry, a login entry that starts the
+    /// app with --hidden, and its icon. Both entries run this binary's
+    /// `app` on the socket this command resolves. An app that is running
+    /// is restarted, on the binary found now. On macOS, writes
+    /// `Kagebunshin.app` in ~/Applications. `setup` does this too. A file
+    /// of the same name that kagebunshin did not write is left alone.
     Install,
-    /// Remove the launcher entry, the login entry and the icon
+    /// Remove what `app install` wrote
     Uninstall,
 }
 
@@ -1010,6 +1015,8 @@ const APP: &str = "kagebunshin-app";
 fn app(socket: Option<PathBuf>, hidden: bool, quit: bool) -> Result<(), CliError> {
     use std::os::unix::process::CommandExt;
     let bin = find_app().ok_or_else(no_app)?;
+    // On macOS the window is its app's only when started from its bundle.
+    let bin = if quit { bin } else { desktop::in_bundle(bin) };
     let socket = units::socket(socket)?;
     if !quit && !desktop::answers(&socket) {
         desktop::start(&bin, &socket)?;
@@ -1548,6 +1555,19 @@ fn setup(socket: Option<PathBuf>, json: bool, no_service: bool) -> Result<(), Cl
                 (Vec::new(), false, false)
             }
         }
+    } else if unit.is_some() && cfg!(target_os = "macos") {
+        // There the app is one of ~/Applications, and has no tray to wait
+        // in: the setup that made the store opens its window, and a later
+        // one opens this build's in place of one that is open.
+        match desktop::written_bundle() {
+            Some(app) => {
+                let socket = units::socket(socket)?;
+                let restarted = desktop::reopened(&socket);
+                let started = !restarted && !existed && desktop::opened(&socket);
+                (vec![app], restarted, started)
+            }
+            None => (Vec::new(), false, false),
+        }
     } else {
         (Vec::new(), false, false)
     };
@@ -1583,7 +1603,28 @@ fn setup(socket: Option<PathBuf>, json: bool, no_service: bool) -> Result<(), Cl
         let why = f.reason.unwrap_or_default();
         print_line(&format!("left alone {} ({why})", f.path.display()))?;
     }
-    if launcher.iter().any(|f| f.reason.is_none()) {
+    if cfg!(target_os = "macos") {
+        if let Some(app) = launcher.first() {
+            let path = app.path.display();
+            print_line(&if app_restarted {
+                format!(
+                    "added the app as {path} and restarted it: its window is open again, on \
+                     this build"
+                )
+            } else if app_started {
+                format!(
+                    "added the app as {path} and opened it: its window is where you approve \
+                     what an agent asks for. Closing it ends the app; Spotlight or \
+                     `kagebunshin app` opens it again"
+                )
+            } else {
+                format!(
+                    "added the app as {path}: Spotlight or `kagebunshin app` opens it, and its \
+                     window is where you approve what an agent asks for"
+                )
+            })?;
+        }
+    } else if launcher.iter().any(|f| f.reason.is_none()) {
         print_line(if app_restarted {
             "added the app to the launcher and restarted it: it is in the tray, \
              and starts there at login"
@@ -1619,12 +1660,21 @@ pub(super) fn prompt(label: &str) -> Result<WireSecret, CliError> {
     rpassword::prompt_password(label)
         .map(WireSecret::new)
         .map_err(|e| {
+            // What asks for the passphrase is a person's to run: there is
+            // nothing here for an agent to arrange.
             CliError::new(
                 Exit::Failure,
                 "no_terminal",
-                format!("cannot read a passphrase from the terminal: {e}"),
+                format!(
+                    "this asks a person for the store passphrase at a terminal, and there is \
+                     none here: {e}"
+                ),
             )
-            .with_hint("run this in an interactive terminal")
+            .with_hint("it is the human's to run, in a terminal of their own")
+            .human(
+                "run that command yourself, in a terminal: it asks for the store passphrase, \
+                 which only you have",
+            )
         })
 }
 

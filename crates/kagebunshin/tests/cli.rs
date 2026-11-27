@@ -119,10 +119,33 @@ fn daemon_not_running() {
     let tmp = tempfile::tempdir().unwrap();
     let socket = no_daemon(tmp.path());
 
+    // With no store nothing is set up yet: `setup` does all of it.
     let o = kb(&["daemon", "ping", "--socket", sock(&socket)]);
     assert_eq!(code(&o), 3);
     let err = stderr(&o);
     assert!(err.contains("not running"), "{err}");
+    assert!(
+        err.contains(
+            "ask the human: kagebunshin is not set up on this machine: run `kagebunshin setup` \
+             in a terminal"
+        ),
+        "{err}"
+    );
+    assert!(!err.contains("daemon install"), "{err}");
+
+    // With one, it is the daemon that is to start.
+    let config = tmp.path().join("config");
+    fs::create_dir(&config).unwrap();
+    fs::write(config.join(kagebunshin::store::STORE_FILE), "").unwrap();
+    let o = Command::new(env!("CARGO_BIN_EXE_kagebunshin"))
+        .args(["daemon", "ping", "--socket", sock(&socket)])
+        .env_remove("KAGEBUNSHIN_SOCKET")
+        .env("KAGEBUNSHIN_CONFIG_DIR", &config)
+        .env("XDG_STATE_HOME", "/nonexistent/kagebunshin-test-state")
+        .output()
+        .unwrap();
+    assert_eq!(code(&o), 3);
+    let err = stderr(&o);
     assert!(
         err.contains("ask the human: run `kagebunshin daemon install` once"),
         "{err}"
@@ -139,7 +162,7 @@ fn daemon_not_running() {
     assert_eq!(code(&o), 3);
     let e = json_error(&o);
     assert_eq!(e["code"], "daemon_not_running");
-    assert!(e["hint"].as_str().unwrap().contains("kagebunshin daemon"));
+    assert!(e["hint"].as_str().unwrap().contains("kagebunshin setup"));
     assert!(o.stdout.is_empty());
 }
 
@@ -405,7 +428,7 @@ run `kagebunshin unlock` to see where each key comes from
     assert_eq!(e["who"], "human");
     assert_eq!(
         e["tell"],
-        "unlock kagebunshin: run `kagebunshin unlock` in a terminal"
+        "unlock kagebunshin: run `kagebunshin unlock` in a terminal, or use Unlock in the app"
     );
 
     let o = w.kb("widget", &["unlock"]);

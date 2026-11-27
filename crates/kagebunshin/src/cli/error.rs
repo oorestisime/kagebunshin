@@ -195,6 +195,19 @@ pub fn start_daemon_hint() -> String {
     )
 }
 
+/// What to do about a daemon that does not answer: on a machine with no
+/// store, nothing is set up yet, and `setup` does all of it.
+fn not_running_hint() -> String {
+    let store = crate::config::ConfigDir::from_env().is_ok_and(|d| d.store_file().exists());
+    if store {
+        start_daemon_hint()
+    } else {
+        "kagebunshin is not set up on this machine: run `kagebunshin setup` in a terminal; it \
+         creates the local store, asking for its new passphrase, and starts and unlocks the daemon"
+            .into()
+    }
+}
+
 /// The command that starts the installed daemon service on this OS.
 pub fn start_daemon_command() -> &'static str {
     #[cfg(target_os = "linux")]
@@ -210,8 +223,8 @@ impl From<ClientError> for CliError {
         match e {
             ClientError::NotRunning { .. } => {
                 CliError::new(Exit::DaemonNotRunning, "daemon_not_running", message)
-                    .with_hint(start_daemon_hint())
-                    .human(start_daemon_hint())
+                    .with_hint(not_running_hint())
+                    .human(not_running_hint())
             }
             ClientError::InsecureDir(_) | ClientError::ForeignDaemon { .. } => {
                 CliError::new(Exit::Refused, "insecure_socket", message)

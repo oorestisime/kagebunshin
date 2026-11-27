@@ -1138,14 +1138,50 @@ fn look_here(
     project_flag: Option<ProjectName>,
     others: bool,
 ) -> Result<(Seen, Option<PathBuf>), CliError> {
-    let (facts, _, values) = gather_at(dir, env.clone(), project_flag.clone(), true, false)?;
+    let store = ConfigDir::from_env().is_ok_and(|d| d.store_file().exists());
+    let installed = super::units::unit_path().is_ok_and(|p| p.exists());
+    let facts = match gather_at(dir.clone(), env.clone(), project_flag.clone(), true, false) {
+        Ok(gathered) => gathered,
+        // No checkout here, and a machine with no store or no daemon:
+        // setting it up or starting it comes first, wherever it is asked.
+        Err(e) => {
+            let down =
+                matches!(super::connect(socket), Err(down) if down.code == "daemon_not_running");
+            if store && !down {
+                return Err(e);
+            }
+            let seen = Seen {
+                // With no store the plan is `setup`, whatever the daemon does.
+                daemon: if down {
+                    Daemon::NotRunning
+                } else {
+                    Daemon::Locked
+                },
+                store,
+                installed,
+                app: false,
+                dir,
+                env_file: None,
+                unlisted: None,
+                others: Vec::new(),
+                apps: Vec::new(),
+                place: Place::Unknown,
+                providers: Vec::new(),
+                waiting: Vec::new(),
+                shared: Vec::new(),
+                env_flag: env,
+                aws_flags: String::new(),
+                now: crate::source::unix_now(),
+            };
+            return Ok((seen, None));
+        }
+    };
+    let (facts, _, values) = facts;
     #[expect(
         clippy::expect_used,
         reason = "gather_at(_, _, _, true, _) never returns None"
     )]
     let facts = facts.expect("required facts");
-    let store = ConfigDir::from_env().is_ok_and(|d| d.store_file().exists());
-    let installed = super::units::unit_path().is_ok_and(|p| p.exists());
     let root = facts.root.clone().filter(|_| facts.subdir.is_none());
     let is_app =
         facts.subdir.is_some() && (facts.example_keys.is_some() || facts.env_file.is_some());

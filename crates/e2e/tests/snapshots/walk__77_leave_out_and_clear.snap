@@ -82,7 +82,7 @@ hint: `kagebunshin project remove depot-front` removes the project; `kagebunshin
 
 $ kagebunshin --json store clear depot-back
 this removes [depot-back.dev] (1 key) from the local store
-{"code":"no_terminal","message":"cannot read a passphrase from the terminal: No such device or address (os error 6)","hint":"run this in an interactive terminal","who":"human","tell":"Please run `kagebunshin store clear depot-back` in a terminal; it asks for the store passphrase and removes the values project depot-back left in the local store."}
+{"code":"no_terminal","message":"this asks a person for the store passphrase at a terminal, and there is none here: No such device or address (os error 6)","hint":"it is the human's to run, in a terminal of their own","who":"human","tell":"Please run `kagebunshin store clear depot-back` in a terminal; it asks for the store passphrase and removes the values project depot-back left in the local store."}
 [exit 1]
 
 (human) $ kagebunshin store clear depot-back

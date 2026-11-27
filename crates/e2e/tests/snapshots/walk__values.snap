@@ -8,8 +8,9 @@ $ kagebunshin run -- sh -c 'echo "key is $API_KEY"'
 key is <redacted:API_KEY>
 
 $ kagebunshin get API_KEY
-kagebunshin: cannot read a passphrase from the terminal: No such device or address (os error 6)
-hint: run this in an interactive terminal
+kagebunshin: this asks a person for the store passphrase at a terminal, and there is none here: No such device or address (os error 6)
+hint: it is the human's to run, in a terminal of their own
+ask the human: run that command yourself, in a terminal: it asks for the store passphrase, which only you have
 [exit 1]
 
 (human) $ kagebunshin get API_URL
