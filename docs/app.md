@@ -60,8 +60,9 @@ needs your approval sends a notification, every time and wherever the
 window is, and waits in the window, which is not brought up for it: the
 tray icon opens it. It waits
 five minutes for your answer (`approval_timeout` in `config.toml` sets how
-long). The window shows the command, the keys it wants, why it asks, who
-asks and the time left. A `kagebunshin store set` run with no terminal
+long). The window asks one question: who asks, the command, the keys it
+gets in one line and the time left. Details opens the rest: every key, the
+processes the request came through, why it asks and what approving does. A `kagebunshin store set` run with no terminal
 asks for values: the window has a hidden field for each key, says which
 keys have a value that yours would replace, and Save writes what you typed
 with the passphrase; a field left empty leaves its key as it was. Closing

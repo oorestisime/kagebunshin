@@ -24,7 +24,7 @@ What is left of v1 is release work:
 - Signed and notarized macOS builds; a Homebrew tap from
   `packaging/homebrew/kagebunshin.rb`; `cargo install` from crates.io,
   which `publish = false` blocks today.
-- Choose the version number for v1 (today `0.0.1-alpha.17`), bump it and
+- Choose the version number for v1 (today `0.0.1-alpha.18`), bump it and
   tag; the release workflow refuses a tag that does not match it.
 
 ## After v1

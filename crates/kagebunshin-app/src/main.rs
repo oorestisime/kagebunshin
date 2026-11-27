@@ -157,6 +157,9 @@ struct App {
     approval_left: Option<u64>,
     /// Every key of the request asked about is listed, not the first few.
     approval_all_keys: bool,
+    /// Whether the request asked about shows how it got here, why it
+    /// waits and what approving does.
+    approval_details: bool,
     /// What the app in the tray reaches outside its window; none in
     /// scenes, tests and headless runs, nor where there is no tray.
     desk: Option<Box<dyn Desk>>,
@@ -424,6 +427,7 @@ impl App {
             approvals_at: 0.0,
             approval_left: None,
             approval_all_keys: false,
+            approval_details: false,
             desk: None,
             code: None,
         }
@@ -584,6 +588,7 @@ fn take_approvals(s: &mut App, now: f64) -> bool {
         // Values are typed first, where a request asks for them.
         s.approval_passphrase.focused = !s.approvals.is_empty() && s.approval_values.is_empty();
         s.approval_all_keys = false;
+        s.approval_details = false;
         s.approval_left = None;
         announce(s);
     }
@@ -1483,11 +1488,13 @@ fn value_list(p: Paint, s: &App, keys: &[KeyName], replaces: &[KeyName]) -> El {
     list
 }
 
-/// Asks to approve a request the daemon holds back: the command as a
-/// command, the keys it wants as a list, why it waits, who asks and how
-/// long is left; the passphrase approves it. For an import into the local
-/// store, what it writes in place of the keys it wants; for values to
-/// type into it, a field for each.
+/// Asks to approve a request the daemon holds back, in as little as a
+/// person answers it from: who asks, the question, the command and one
+/// line of what it gets; the passphrase approves it. How the request got
+/// here, why it waits and what approving does are a click away, under
+/// Details, and so is every key of a long list. For an import into the
+/// local store, what it writes in place of that line; for values to type
+/// into it, a field for each: those say what approving writes as well.
 fn approval_prompt(p: Paint, s: &App, prompt: &ApprovalPrompt) -> El {
     let import = match &prompt.reason {
         ApprovalReason::Import { sections, unlock } => Some((sections, *unlock)),
@@ -1497,13 +1504,18 @@ fn approval_prompt(p: Paint, s: &App, prompt: &ApprovalPrompt) -> El {
         ApprovalReason::Type { replaces, unlock } => Some((replaces, *unlock)),
         _ => None,
     };
+    // A request that hands values out; the others write the store.
+    let hands_out = import.is_none() && typing.is_none();
     // Nothing is approved without the passphrase: the button is dimmed
     // until one is typed. Enter in a field still leads to it.
     let ready = !s.answering && !s.approval_passphrase.text.is_empty();
     // What it says is the phone's page's too: see `Words`.
     let Words {
-        title,
+        title: _,
+        question,
+        summary,
         command_label,
+        command_plain,
         command: shown,
         wants,
         asked_label,
@@ -1533,6 +1545,13 @@ fn approval_prompt(p: Paint, s: &App, prompt: &ApprovalPrompt) -> El {
                 .w_full()
                 .wrap(),
         );
+    // Labelled only where the label says something: a script handed to a
+    // shell, or a command line another machine reports.
+    let command = if command_plain {
+        col().key("kb-approval-command").w_full().child(command)
+    } else {
+        part(p, "kb-approval-command", command_label, command)
+    };
 
     let n = prompt.keys.len();
     let all = s.approval_all_keys || n <= SHOWN_KEYS;
@@ -1557,50 +1576,74 @@ fn approval_prompt(p: Paint, s: &App, prompt: &ApprovalPrompt) -> El {
         );
     }
 
-    let asked_by = col()
-        .w_full()
-        .gap(2.0)
-        .child(
-            text(format!("{who}{place}"))
-                .key("kb-approval-who")
-                .font(BODY)
-                .color(p.t.text)
-                .spans(vec![Span::new(0, who.len()).bold()])
-                .wrap(),
-        )
-        .child(
-            text(detail)
-                .key("kb-approval-parents")
-                .font(type_::MONO_CAPTION.mono())
-                .color(p.t.text_secondary)
-                .wrap(),
-        );
-
     let left = s.approval_left.or(prompt.left);
-    let mut head = row()
-        .w_full()
-        .gap(space::S3)
-        .items_start()
-        .child(text(title).font(TITLE).color(p.t.text).wrap().grow(1.0));
+    let mut head = row().w_full().gap(space::S3).items_center().child(
+        text(format!("{who}{place}"))
+            .key("kb-approval-who")
+            .font(type_::LABEL)
+            .color(p.t.text_secondary)
+            .spans(vec![Span::new(0, who.len()).bold().color(p.t.text)])
+            .truncate()
+            .grow(1.0),
+    );
     if let Some(left) = left {
         head = head.child(
-            badge(
-                "kb-approval-left",
-                &format!("denied in {}", countdown(left)),
-                if left <= 30 {
+            text(format!("denied in {}", countdown(left)))
+                .key("kb-approval-left")
+                .font(type_::LABEL)
+                .color(if left <= 30 {
                     p.warn
                 } else {
                     p.t.text_secondary
-                },
-            )
-            .a11y_hidden(),
+                })
+                .a11y_hidden(),
         );
     }
 
+    let quiet = |key: &str, what: &str| {
+        text(what)
+            .key(key)
+            .font(type_::LABEL)
+            .color(p.t.text_secondary)
+            .wrap()
+    };
+    let toggle = button(
+        p,
+        "kb-approval-toggle",
+        if s.approval_details {
+            "Hide details"
+        } else {
+            "Details"
+        },
+        true,
+        |s, tx| {
+            s.approval_details = !s.approval_details;
+            // Looking is not answering: what is typed next still goes to
+            // the passphrase, where no value is asked for first.
+            if s.approval_values.is_empty() {
+                s.approval_passphrase.focused = true;
+                tx.focus("kb-approval-field", false);
+            }
+        },
+    )
+    .h(22.0);
+    // The line under the command: what it gets, or for a request that
+    // writes the store what approving does, with the way to the rest.
+    let line = row()
+        .w_full()
+        .gap(space::S3)
+        .items_center()
+        .child(if hands_out {
+            quiet("kb-approval-summary", &summary).grow(1.0)
+        } else {
+            quiet("kb-approval-trust", trust).grow(1.0)
+        })
+        .child(toggle);
+
     // The part that gives way, and scrolls, when the window is too short
-    // for it all: the title, the passphrase and the buttons stay put.
-    let mut details = col()
-        .key("kb-approval-details")
+    // for it all: the question, the passphrase and the buttons stay put.
+    let mut body = col()
+        .key("kb-approval-body")
         .w_full()
         .min_h(0.0)
         .shrink()
@@ -1609,41 +1652,64 @@ fn approval_prompt(p: Paint, s: &App, prompt: &ApprovalPrompt) -> El {
         })
         .scroll_edge_fade(24.0)
         .gap(space::S3)
-        .child(part(p, "kb-approval-command", command_label, command))
-        .child(match (import, typing) {
-            (Some((sections, unlock)), _) => part(
-                p,
-                "kb-approval-import",
-                wants,
-                import_list(p, s, sections, unlock),
-            ),
-            (None, Some((replaces, _))) => part(
-                p,
-                "kb-approval-values",
-                wants,
-                value_list(p, s, &prompt.keys, replaces),
-            ),
-            (None, None) => part(p, "kb-approval-keys", wants, chips),
-        })
-        .child(part(p, "kb-approval-caller", asked_label, asked_by));
-    if !why.is_empty() {
-        details = details.child(part(
+        .child(command);
+    body = match (import, typing) {
+        (Some((sections, unlock)), _) => body.child(part(
             p,
-            "kb-approval-why",
-            "Why it asks",
-            text(why).font(BODY).color(p.t.text).w_full().wrap(),
+            "kb-approval-import",
+            wants.clone(),
+            import_list(p, s, sections, unlock),
+        )),
+        (None, Some((replaces, _))) => body.child(part(
+            p,
+            "kb-approval-values",
+            wants.clone(),
+            value_list(p, s, &prompt.keys, replaces),
+        )),
+        (None, None) => body,
+    };
+    body = body.child(line);
+    if s.approvals.len() > 1 {
+        body = body.child(quiet(
+            "kb-approval-queue",
+            &format!("{} more waiting after this one", s.approvals.len() - 1),
         ));
     }
-    if s.approvals.len() > 1 {
-        details = details.child(
-            text(format!(
-                "{} more waiting after this one",
-                s.approvals.len() - 1
-            ))
-            .key("kb-approval-queue")
-            .font(BODY)
-            .color(p.t.text_secondary),
-        );
+    if s.approval_details {
+        let mut details = col().key("kb-approval-details").w_full().gap(space::S3);
+        // With no key known there is still what it gets to say.
+        if hands_out && n > 0 {
+            details = details.child(part(p, "kb-approval-keys", wants, chips));
+        } else if hands_out {
+            details = details.child(quiet("kb-approval-keys", &wants));
+        }
+        details = details.child(part(
+            p,
+            "kb-approval-caller",
+            asked_label,
+            text(detail)
+                .key("kb-approval-parents")
+                .font(type_::MONO_CAPTION.mono())
+                .color(p.t.text_secondary)
+                .wrap(),
+        ));
+        if !why.is_empty() {
+            details = details.child(part(
+                p,
+                "kb-approval-why",
+                "Why it asks",
+                quiet("kb-approval-why-text", &why),
+            ));
+        }
+        if hands_out {
+            details = details.child(part(
+                p,
+                "kb-approval-approving",
+                "Approving",
+                quiet("kb-approval-trust", trust),
+            ));
+        }
+        body = body.child(details);
     }
 
     let mut d = card(p)
@@ -1651,14 +1717,14 @@ fn approval_prompt(p: Paint, s: &App, prompt: &ApprovalPrompt) -> El {
         .role("dialog")
         .label("Approve")
         .child(head)
-        .child(details)
         .child(
-            text(trust)
-                .key("kb-approval-trust")
-                .font(BODY)
-                .color(p.warn)
+            text(question)
+                .key("kb-approval-question")
+                .font(TITLE)
+                .color(p.t.text)
                 .wrap(),
-        );
+        )
+        .child(body);
     if let Some(error) = &s.approval_error {
         d = d.child(
             text(error)
@@ -1673,11 +1739,7 @@ fn approval_prompt(p: Paint, s: &App, prompt: &ApprovalPrompt) -> El {
             p,
             "kb-approval-field",
             &s.approval_passphrase,
-            if typing.is_some() {
-                "The local store's passphrase, to save"
-            } else {
-                "The local store's passphrase, to approve"
-            },
+            "Passphrase",
             |s| &mut s.approval_passphrase,
         )
         .w_full()
@@ -1689,9 +1751,7 @@ fn approval_prompt(p: Paint, s: &App, prompt: &ApprovalPrompt) -> El {
             .w_full()
             .gap(space::S3)
             .items_center()
-            .child(
-                button(p, "kb-approval-deny", "Deny", !s.answering, deny).fill(p.warn.alpha(0.2)),
-            )
+            .child(button(p, "kb-approval-deny", "Deny", !s.answering, deny))
             .child(
                 text(if typing.is_some() {
                     "Esc denies \u{00b7} Enter saves"
@@ -6629,7 +6689,15 @@ mod scenes {
     /// The same with every key listed.
     pub fn approval_many_open(s: &mut App) {
         approval_many(s);
+        s.approval_details = true;
         s.approval_all_keys = true;
+    }
+
+    /// A request with its details shown: the keys, how it got here, why
+    /// it waits and what approving does.
+    pub fn approval_details(s: &mut App) {
+        approval(s);
+        s.approval_details = true;
     }
 
     /// A request from a checkout with no .env.example, for an environment
@@ -7075,6 +7143,7 @@ mod scenes {
         ("phone-pairing", phone_pairing),
         ("proton", proton),
         ("approval", approval),
+        ("approval-details", approval_details),
         ("approval-proton", approval_proton),
         ("approval-waiting", approval_waiting),
         ("approval-script", approval_script),
@@ -7220,6 +7289,13 @@ mod tests {
     fn fixed(scene: fn(&mut App)) -> App {
         let mut s = App::blank();
         scene(&mut s);
+        s
+    }
+
+    /// [`fixed`], with the request asked about showing its details.
+    fn detailed(scene: fn(&mut App)) -> App {
+        let mut s = fixed(scene);
+        s.approval_details = true;
         s
     }
 
@@ -7458,7 +7534,7 @@ mod tests {
     #[test]
     fn a_proton_key_is_shown_by_name_never_by_its_ids() {
         for scene in [scenes::proton as fn(&mut App), scenes::approval_proton] {
-            let all = texts(&runtime(fixed(scene)));
+            let all = texts(&runtime(detailed(scene)));
             assert!(all.contains("agents/MAIL_TOKEN"), "{all}");
             assert!(!all.contains("Qm9n") && !all.contains("aXRl"), "{all}");
         }
@@ -7466,7 +7542,7 @@ mod tests {
         assert!(rt.find("kb-key-MAIL_TOKEN/kb-from").is_some());
         let all = texts(&rt);
         assert!(!all.contains("secrets of one key"), "{all}");
-        let all = texts(&runtime(fixed(scenes::approval_proton)));
+        let all = texts(&runtime(detailed(scenes::approval_proton)));
         assert!(
             all.contains("Secret proton:agents/MAIL_TOKEN is marked sensitive"),
             "{all}"
@@ -8328,26 +8404,43 @@ mod tests {
         s.approver = Some(approver);
         let mut rt = runtime(s);
         rt.poll = Some(poll);
+        // What a person answers from: who asks, the question, the command
+        // and what it gets, in one line.
         let all = texts(&rt);
         for shown in [
-            "A command asks for sensitive values of widget/dev",
-            "npm run deploy -- --dry-run",
-            "Wants 1 value marked sensitive",
-            "STRIPE_SECRET",
-            "acme/shared/stripe is marked sensitive wherever it is read. widget/dev itself is \
-             not marked.",
-            "Asked by (names as the processes give them)",
             "Claude Code in /src/widget",
-            "kitty \u{203a} zsh \u{203a} claude \u{203a} zsh \u{00b7} pid 4242",
-            "Approving trusts this command",
+            "Hand sensitive values of widget/dev to this command?",
+            "npm run deploy -- --dry-run",
+            "1 key marked sensitive: STRIPE_SECRET",
             "denied in 4:32",
         ] {
             assert!(all.contains(shown), "{shown}: {all}");
+        }
+        let behind = [
+            "Wants 1 value marked sensitive",
+            "acme/shared/stripe is marked sensitive wherever it is read. widget/dev itself is \
+             not marked.",
+            "Asked by (names as the processes give them)",
+            "kitty \u{203a} zsh \u{203a} claude \u{203a} zsh \u{00b7} pid 4242",
+            "Approving trusts this command",
+        ];
+        for hidden in behind {
+            assert!(!all.contains(hidden), "{hidden}: {all}");
         }
         // With no passphrase typed there is nothing to approve with.
         click(&mut rt, "kb-approval-ok");
         assert!(sent.try_recv().is_err());
         assert!(!rt.state.answering);
+        // The rest is a click away, and goes again with another. Looking
+        // leaves what is typed next going to the passphrase.
+        click(&mut rt, "kb-approval-toggle");
+        let all = texts(&rt);
+        for shown in behind {
+            assert!(all.contains(shown), "{shown}: {all}");
+        }
+        click(&mut rt, "kb-approval-toggle");
+        assert!(!texts(&rt).contains("Approving trusts this command"));
+        assert!(rt.state.approval_passphrase.focused);
         rt.paste("correct horse");
         rt.frame(0.0);
         assert!(!texts(&rt).contains("horse"));
@@ -8515,9 +8608,10 @@ mod tests {
     /// one that waits for a decision says where that decision is made.
     #[test]
     fn an_approval_for_a_whole_environment_says_why() {
-        let all = texts(&runtime(fixed(scenes::approval_waiting)));
+        let all = texts(&runtime(detailed(scenes::approval_waiting)));
         for shown in [
-            "A command asks for widget/prod, which looks like production",
+            "Hand widget/prod to this command?",
+            "2 keys: DATABASE_URL, STRIPE_KEY",
             "Wants every value widget/prod sets. It expects these 2 keys",
             "DATABASE_URL",
             "STRIPE_KEY",
@@ -8531,13 +8625,10 @@ mod tests {
         }
         assert!(!all.contains("marked sensitive"), "{all}");
 
-        let mut s = fixed(scenes::approval_waiting);
+        let mut s = detailed(scenes::approval_waiting);
         s.approvals[0].reason = ApprovalReason::Marked;
         let all = texts(&runtime(s));
-        assert!(
-            all.contains("A command asks for widget/prod, marked sensitive"),
-            "{all}"
-        );
+        assert!(all.contains("Hand widget/prod to this command?"), "{all}");
         assert!(
             all.contains("widget/prod is marked sensitive: every value it sets"),
             "{all}"
@@ -8644,8 +8735,9 @@ mod tests {
     /// and says so: how many where the daemon knows them.
     #[test]
     fn an_approval_with_no_example_says_it_is_for_every_key() {
-        let all = texts(&runtime(fixed(scenes::approval_every_key)));
+        let all = texts(&runtime(detailed(scenes::approval_every_key)));
         for shown in [
+            "All 13 keys widget/prod sets: ",
             "Wants all 13 keys widget/prod sets: no .env.example here lists the ones it needs",
             "ANALYTICS_ID",
             "1 more",
@@ -8654,18 +8746,27 @@ mod tests {
         }
         assert!(!all.contains("It expects"), "{all}");
 
-        let all = texts(&runtime(fixed(scenes::approval_every_key_unread)));
-        let shown =
-            "Wants every key widget/prod sets: no .env.example here lists the ones it needs";
-        assert!(all.contains(shown), "{all}");
+        let all = texts(&runtime(detailed(scenes::approval_every_key_unread)));
+        for shown in [
+            "Every key widget/prod sets",
+            "Wants every key widget/prod sets: no .env.example here lists the ones it needs",
+        ] {
+            assert!(all.contains(shown), "{shown}: {all}");
+        }
     }
 
     /// Many keys are listed a few at first; with all of them listed the
     /// dialog still fits the window, its buttons in reach.
     #[test]
     fn many_keys_fold_and_the_dialog_stays_in_the_window() {
+        // Closed, a long list is two names and a count.
+        let all = texts(&runtime(fixed(scenes::approval_many)));
+        let summed = "40 keys: SERVICE_1_API_TOKEN, SERVICE_2_API_TOKEN and 38 more";
+        assert!(all.contains(summed), "{all}");
+        assert!(!all.contains("SERVICE_3_API_TOKEN"), "{all}");
+
         let mut rt = Runtime::new(
-            fixed(scenes::approval_many),
+            detailed(scenes::approval_many),
             view,
             SIZE,
             Env::new(true, 2.0),
@@ -8701,7 +8802,7 @@ mod tests {
         let rt = runtime(fixed(scenes::approval_import));
         let all = texts(&rt);
         for shown in [
-            "A command asks to import 3 env files into the local store",
+            "Import 3 env files into the local store?",
             "kagebunshin onboard /src/widget /src/gadget /src/billing",
             "Writes 9 keys, by name; the values are read from the files",
             "[widget.dev], a new project",
@@ -8760,7 +8861,7 @@ mod tests {
         rt.poll = Some(poll);
         let all = texts(&rt);
         for shown in [
-            "A command asks you to type 3 values for widget/dev",
+            "Type 3 values for widget/dev?",
             "kagebunshin store set widget.dev STRIPE_SECRET SESSION_KEY SENTRY_DSN",
             "Type the values, one line each. A key left empty stays as it is",
             "has a value now, which this replaces",
@@ -8887,7 +8988,7 @@ mod tests {
         s.approval_values = value_fields(s.approvals.first());
         let all = texts(&runtime(s));
         assert!(
-            all.contains("A command asks you to type the value of STRIPE_SECRET for widget/dev"),
+            all.contains("Type the value of STRIPE_SECRET for widget/dev?"),
             "{all}"
         );
         assert!(all.contains("Type its value, on one line"), "{all}");
@@ -8897,7 +8998,7 @@ mod tests {
     /// its command line is only what that machine reports.
     #[test]
     fn a_remote_approval_names_the_machine() {
-        let mut s = fixed(scenes::approval);
+        let mut s = detailed(scenes::approval);
         s.approvals[0].pid = 0;
         s.approvals[0].parents.clear();
         s.approvals[0].remote = Some(kagebunshin::ipc::protocol::RemotePeer {
@@ -8909,7 +9010,7 @@ mod tests {
         });
         let all = texts(&runtime(s));
         for shown in [
-            "Machine laptop asks for sensitive values of widget/dev",
+            "Hand sensitive values of widget/dev to a command on machine laptop?",
             "Command (as the remote machine reports it)",
             "Machine laptop, user dev@example.com",
             "in /src/widget there, as it reports",

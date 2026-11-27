@@ -75,7 +75,7 @@ secret, only that it is there.
 
 <p align="center">
   <img src="docs/img/approval.png" width="760"
-       alt="The app asks before a command gets a value marked sensitive: it shows the command, the key it wants, who asks and why.">
+       alt="The app asks before a command gets a value marked sensitive: who asks, the command and the key it wants, with the rest under Details.">
 </p>
 
 ## How it works
@@ -185,7 +185,7 @@ See
 
 <p align="center">
   <img src="docs/img/phone-page.png" width="300"
-       alt="The approval page on a phone: the command that asks, the keys it expects, who asks and why, with Deny and Approve buttons.">
+       alt="The approval page on a phone: who asks, the command and the keys it expects, with Deny and Approve buttons.">
 </p>
 
 ## What it does not do
@@ -220,7 +220,7 @@ they need and keeps the values with the original.
 ## Status
 
 > [!NOTE]
-> **Alpha**; the latest build is v0.0.1-alpha.17.
+> **Alpha**; the latest build is v0.0.1-alpha.18.
 
 There are binaries for Linux x86_64 and aarch64 (glibc 2.35 or later)
 and for macOS arm64. The macOS

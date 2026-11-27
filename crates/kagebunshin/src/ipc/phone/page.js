@@ -232,22 +232,33 @@ function idle() {
   };
 }
 
-// One waiting request, in the words the app on the computer uses.
+// One waiting request, in the words the app on the computer uses: who
+// asks, the question, the command and one line of what it gets. How it
+// got here, why it waits and what approving does are a tap away.
 function request(p, more) {
   const w = p.words;
   const keys = p.keys.map((k) => `<span class="chip">${esc(k)}</span>`).join('');
+  const line = p.here ? w.summary : 'This one takes the passphrase: answer it in the app on your computer. You can deny it here.';
   show(`request:${p.id}`, `<div class="scroll">
-    <span class="pill" id="left"></span>${more ? ` <span class="pill">${more} more waiting</span>` : ''}
-    <h1>${esc(w.title)}</h1>
-    <div class="label">${esc(w.command_label)}</div><div class="cmd">${esc(w.command)}</div>
-    <div class="label">${esc(w.wants)}</div>${keys ? `<div class="chips">${keys}</div>` : ''}
-    <div class="label">${esc(w.asked_label)}</div>
-    <div><b>${esc(w.who)}</b>${esc(w.place)}</div><div class="chain">${esc(w.detail)}</div>
-    ${w.why ? `<div class="label">Why it asks</div><div>${esc(w.why)}</div>` : ''}
-    <div class="warn">${p.here ? esc(w.trust) : 'This one takes the passphrase: answer it in the app on your computer. You can deny it here.'}</div>
+    <div class="who"><b>${esc(w.who)}</b><span class="place">${esc(w.place)}</span><span class="left" id="left"></span></div>
+    <h1>${esc(w.question)}</h1>
+    ${w.command_plain ? '' : `<div class="label">${esc(w.command_label)}</div>`}<div class="cmd">${esc(w.command)}</div>
+    <div class="line">${esc(line)} <button class="link" id="more">Details</button></div>
+    ${more ? `<div class="line">${more} more waiting after this one</div>` : ''}
+    <div class="details" id="details" hidden>
+      ${p.here && keys ? `<div class="label">${esc(w.wants)}</div><div class="chips">${keys}</div>` : ''}
+      <div class="label">${esc(w.asked_label)}</div><div class="chain">${esc(w.detail)}</div>
+      ${w.why ? `<div class="label">Why it asks</div><div>${esc(w.why)}</div>` : ''}
+      <div class="label">Approving</div><div>${esc(w.trust)}</div>
+    </div>
   </div>
   <div class="err" id="err"></div>
   <div class="bar"><button class="deny" id="deny">Deny</button>${p.here ? `<button class="approve" id="approve">${icon.face} Approve</button>` : ''}</div>`);
+  $('more').onclick = () => {
+    const open = $('details').hidden;
+    $('details').hidden = !open;
+    $('more').textContent = open ? 'Hide details' : 'Details';
+  };
   const paint = () => {
     const pill = $('left');
     if (!pill) return;

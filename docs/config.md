@@ -233,7 +233,7 @@ is installed on the phone but Tailscale.
 
 <p align="center">
   <img src="img/phone-page.png" width="300"
-       alt="The approval page on a phone: the command that asks, the keys it expects, who asks and why, with Deny and Approve buttons.">
+       alt="The approval page on a phone: who asks, the command and the keys it expects, with Deny and Approve buttons.">
 </p>
 
 It needs:
@@ -279,9 +279,9 @@ kagebunshin status
   removes it, with the passphrase. The pairing is in the encrypted store:
   the phone's name and Tailscale node id, and its passkey's public key,
   which is no secret.
-- A request shows on the phone as it does in the app: the command, the
-  keys it wants, why it asks, who asks and the time left, by name and
-  never a value. Approve asks for the passkey; Deny asks for nothing, as
+- A request shows on the phone as it does in the app: who asks, the
+  command, the keys it gets in one line and the time left, with the rest
+  under Details, by name and never a value. Approve asks for the passkey; Deny asks for nothing, as
   in the app. The first answer counts, wherever it is given, and the
   other side says where that was.
 - The phone approves hand-outs only. Unlocking, an import, values an
