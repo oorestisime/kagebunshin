@@ -128,7 +128,8 @@ What needs you is decided by explicit marks, see
   is handed out. The prompt is never in the caller's terminal, where an
   agent could read the passphrase.
 - **Approving trusts the command.** A script an agent wrote can print or
-  send on the value it was given; the prompt says so.
+  send on the value it was given; the prompt says so under Details, not
+  on its face, so that a request answered many times a day stays short.
 - **When marks apply:** they are read at hand-out time from the unlocked
   store, so a new mark applies at once, without a `sync`.
 - **Removing a mark:** it is confirmed in the app's window and takes the

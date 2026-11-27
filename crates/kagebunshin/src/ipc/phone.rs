@@ -1300,6 +1300,13 @@ remotes = ["git@github.com:acme/widget.git"]
         ] {
             assert!(!words[said].as_str().unwrap().is_empty(), "{said}: {words}");
         }
+        // What the page is headed with, and its one line of what is asked.
+        assert_eq!(
+            words["question"],
+            "Hand sensitive values of widget/dev to this command?"
+        );
+        assert_eq!(words["summary"], "1 key marked sensitive: S");
+        assert_eq!(words["command_plain"], true);
         // Names only: no value is on the page.
         assert!(!held.to_string().contains("\"v\""), "{held}");
 

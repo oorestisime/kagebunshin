@@ -17,7 +17,7 @@ name = "kagebunshin-app"
 path = "src/main.rs"
 
 [dependencies]
-kagebunshin = { path = "../kagebunshin", version = "0.0.1-alpha.17" }
+kagebunshin = { path = "../kagebunshin", version = "0.0.1-alpha.18" }
 # Prerelease: pinned to a commit on `dev`, which is never rewritten. Without
 # the audio and SVG decoders, which the app does not use.
 rune = { version = "0.0.1", git = "https://github.com/anomalyco/rune", rev = "bba30a61cfcec6683e3fdedf156a92dae89d8b04", default-features = false, features = ["accessibility", "dbus", "embedded-fonts", "metal-backend"] }
