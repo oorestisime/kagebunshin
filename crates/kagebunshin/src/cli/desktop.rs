@@ -270,7 +270,8 @@ pub(super) fn write_bundle(bundle: &Path, app: &Path) -> Result<PathBuf, String>
     std::fs::rename(&new, &inner).map_err(io(&inner))?;
     let icon = resources.join("kagebunshin.icns");
     std::fs::write(&icon, ICNS).map_err(io(&icon))?;
-    if cfg!(target_os = "macos") {
+    // Not from a test, which writes its bundle where no app belongs.
+    if cfg!(target_os = "macos") && !cfg!(test) {
         // Seals the bundle with the signature its binary already has the
         // kind of: one that names no developer. Without it the app still
         // runs; with it macOS knows the folder and the binary as one app.

@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::daemon::broker::{Holder, STANDING, Scope};
-use crate::ipc::protocol::{Caller, StandingOffer, StandingView};
+use crate::ipc::protocol::{StandingOffer, StandingView};
 use crate::test_support::Orphan;
 
 async fn standing(d: &Daemon) -> Vec<StandingView> {
@@ -228,7 +228,7 @@ impl FakeAgent {
     }
 
     /// The agent's command, as the daemon sees a caller.
-    pub(super) fn caller(&self) -> Caller {
+    pub(super) fn caller(&self) -> crate::ipc::protocol::Caller {
         crate::test_support::caller_for(self.child)
     }
 
